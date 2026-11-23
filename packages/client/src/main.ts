@@ -7,6 +7,7 @@ import {
   TrainingStage,
 } from '@minimind-viz/shared';
 import { InspectableMetadata, MiniMindScene } from './scene/MiniMindScene';
+import type { MicroLmUpdateMessage } from './workers/microLmWorker';
 
 interface StageCopy {
   simpleHint: string;
@@ -228,6 +229,12 @@ class MiniMindVisualizerApp {
   private storyActive = true;
   private storyIdx = 0;
 
+  // Real In-Browser Neural Micro-LM Web Worker state
+  private microLmWorker: Worker | null = null;
+  private microLmActive = false;
+  private microLmPaused = false;
+  private latestMicroLm: MicroLmUpdateMessage | null = null;
+
   constructor() {
     const canvasContainer = document.getElementById('canvas-container')!;
     const labelsContainer = document.getElementById('labels-container')!;
@@ -385,6 +392,46 @@ class MiniMindVisualizerApp {
       btnStoryToggle.classList.remove('active');
     });
 
+    // Real In-Browser Micro-LM Web Worker Controls
+    const btnMicroLm = document.getElementById('btn-microlm-toggle')!;
+    const microLmPanel = document.getElementById('microlm-controls')!;
+    const promptInput = document.getElementById('microlm-prompt-input') as HTMLInputElement;
+
+    btnMicroLm.addEventListener('click', () => {
+      this.microLmActive = !this.microLmActive;
+      btnMicroLm.classList.toggle('active', this.microLmActive);
+      microLmPanel.classList.toggle('hidden', !this.microLmActive);
+      this.lossHistory = [];
+
+      if (this.microLmActive) {
+        this.setCardCollapsed('body-pred', false);
+        this.ensureMicroLmWorker();
+        this.microLmPaused = false;
+        this.microLmWorker?.postMessage({ type: 'START' });
+      } else {
+        this.microLmWorker?.postMessage({ type: 'PAUSE' });
+      }
+    });
+
+    const applyPrompt = (text: string) => {
+      promptInput.value = text;
+      this.microLmWorker?.postMessage({ type: 'SET_PROMPT', prompt: text });
+    };
+
+    document.getElementById('btn-microlm-apply')!.addEventListener('click', () => {
+      applyPrompt(promptInput.value);
+    });
+
+    promptInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') applyPrompt(promptInput.value);
+    });
+
+    document.querySelectorAll<HTMLButtonElement>('.microlm-pills .pill-btn').forEach((pill) => {
+      pill.addEventListener('click', () => {
+        if (pill.dataset.prompt) applyPrompt(pill.dataset.prompt);
+      });
+    });
+
     // Speed slider
     const speedSlider = document.getElementById('speed-slider') as HTMLInputElement;
     const speedLabel = document.getElementById('speed-label')!;
@@ -392,18 +439,30 @@ class MiniMindVisualizerApp {
       const speed = Number(speedSlider.value);
       speedLabel.textContent = `${speed.toFixed(2).replace(/\.00$/, '.0')}x`;
       this.sendCommand({ type: 'SET_SPEED', speed });
+      this.microLmWorker?.postMessage({ type: 'SET_SPEED', speed });
     });
 
     document.getElementById('btn-pause')!.addEventListener('click', () => {
+      if (this.microLmActive) {
+        this.microLmPaused = !this.microLmPaused;
+        this.microLmWorker?.postMessage({ type: this.microLmPaused ? 'PAUSE' : 'RESUME' });
+      }
       this.sendCommand({ type: 'TOGGLE_PAUSE' });
     });
 
     document.getElementById('btn-step')!.addEventListener('click', () => {
+      if (this.microLmActive) {
+        this.microLmPaused = true;
+        this.microLmWorker?.postMessage({ type: 'STEP_ONCE' });
+      }
       this.sendCommand({ type: 'STEP_ONCE' });
     });
 
     document.getElementById('btn-reset')!.addEventListener('click', () => {
       this.lossHistory = [];
+      if (this.microLmActive) {
+        this.microLmWorker?.postMessage({ type: 'RESET' });
+      }
       this.sendCommand({ type: 'RESET' });
     });
 
@@ -456,16 +515,73 @@ class MiniMindVisualizerApp {
     }
   }
 
-  private onTelemetryFrame(frame: TelemetryFrame, viaServer: boolean): void {
-    this.latestFrame = frame;
+  private ensureMicroLmWorker(): void {
+    if (this.microLmWorker) return;
+    const worker = new Worker(new URL('./workers/microLmWorker.ts', import.meta.url), {
+      type: 'module',
+    });
+    worker.onmessage = (ev: MessageEvent<MicroLmUpdateMessage>) => {
+      if (ev.data?.type === 'MICRO_LM_UPDATE') {
+        this.latestMicroLm = ev.data;
+        if (this.microLmActive && this.latestFrame) {
+          this.onTelemetryFrame(this.latestFrame, this.wsConnected);
+        }
+      }
+    };
+    this.microLmWorker = worker;
+  }
+
+  private mergeMicroLmOverlay(baseFrame: TelemetryFrame): TelemetryFrame {
+    const mlm = this.latestMicroLm;
+    if (!this.microLmActive || !mlm) return baseFrame;
+
+    const [gE, gW1, gW2] = mlm.gradNorms;
+    const layers = baseFrame.layers.map((l, idx) => {
+      const realGrad = idx === 0 ? gE : idx < 7 ? gW1 : gW2;
+      return {
+        ...l,
+        baseWeightGradNorm: baseFrame.stage === 'lora' ? 0 : realGrad,
+        loraAdapterGradNorm: baseFrame.stage === 'lora' ? realGrad : 0,
+      };
+    });
+
+    return {
+      ...baseFrame,
+      step: mlm.step,
+      epoch: mlm.epoch,
+      loss: mlm.batchLoss,
+      layers,
+      predictionDemo: {
+        promptContext: `Train thật (Web Worker • ${mlm.totalParams.toLocaleString()} params, Vocab ${mlm.vocabSize}): "${mlm.promptText} [ ___ ]"`,
+        targetToken: mlm.targetToken,
+        targetProb: mlm.targetProb,
+        tokenSurpriseLoss: mlm.tokenSurpriseLoss,
+        batchAvgLoss: mlm.batchLoss,
+        candidates: mlm.candidates,
+      },
+    };
+  }
+
+  private onTelemetryFrame(rawFrame: TelemetryFrame, viaServer: boolean): void {
+    this.latestFrame = rawFrame;
+    const frame = this.mergeMicroLmOverlay(rawFrame);
     this.syncControlsWithFrame(frame);
     this.scene.updateFromTelemetry(frame);
 
     const isSimple = this.explanationLevel === 'simple';
 
+    // Update Live Micro-LM generated output box if active
+    if (this.microLmActive && this.latestMicroLm) {
+      document.getElementById('microlm-gen-output')!.textContent =
+        `«${this.latestMicroLm.generatedText}»`;
+    }
+
     // Connection badge
     const badge = document.getElementById('conn-badge')!;
-    if (frame.source === 'pytorch_live') {
+    if (this.microLmActive) {
+      badge.textContent = 'WEB WORKER (TRAIN THẬT)';
+      badge.className = 'conn-badge worker';
+    } else if (frame.source === 'pytorch_live') {
       badge.textContent = 'PYTORCH LIVE';
       badge.className = 'conn-badge live';
     } else if (viaServer) {

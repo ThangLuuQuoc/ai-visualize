@@ -54,8 +54,11 @@
           </div>
         </div>
 
-        <!-- Playback, Speed, Story Mode & Connection Controls -->
+        <!-- Playback, Speed, Story Mode, Real Web Worker & Connection Controls -->
         <div class="control-group playback-controls">
+          <button id="btn-microlm-toggle" class="microlm-toggle-btn" title="Train mạng nơ-ron thật bằng Backprop + Adam ngay trên trình duyệt">
+            🧪 Train Thật (Web Worker)
+          </button>
           <button id="btn-story-toggle" class="story-toggle-btn active" title="Bật/Tắt chế độ kể chuyện 8 bước">
             📖 Story Mode (8 cảnh)
           </button>
@@ -81,6 +84,23 @@
               <span id="surprise-pill" class="tag-badge">Độ bất ngờ từ này: 2.81</span>
             </div>
             <div id="body-pred" class="card-collapsible">
+              <!-- Live Micro-LM Interactive Prompt Bar (shown when Web Worker training is active) -->
+              <div id="microlm-controls" class="microlm-controls hidden">
+                <div class="microlm-input-row">
+                  <input id="microlm-prompt-input" type="text" value="Hà Nội là thủ đô của" placeholder="Gõ cụm từ tiếng Việt..." />
+                  <button id="btn-microlm-apply" class="icon-btn">Thử</button>
+                </div>
+                <div class="microlm-pills">
+                  <button class="pill-btn" data-prompt="Hà Nội là thủ đô của">Hà Nội...</button>
+                  <button class="pill-btn" data-prompt="Python là ngôn ngữ">Python...</button>
+                  <button class="pill-btn" data-prompt="MiniMind giúp tối ưu">MiniMind...</button>
+                  <button class="pill-btn" data-prompt="LoRA đóng băng trọng số">LoRA...</button>
+                </div>
+                <div class="microlm-gen-box">
+                  <span class="gen-label">✍️ Mạng đang tự viết tiếp:</span>
+                  <span id="microlm-gen-output" class="gen-output">...</span>
+                </div>
+              </div>
               <div id="pred-context" class="pred-context"></div>
               <div id="pred-candidates" class="pred-candidates"></div>
               <div id="pred-explanation" class="card-hint" style="margin-top:6px;margin-bottom:0;"></div>

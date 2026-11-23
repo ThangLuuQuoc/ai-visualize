@@ -5,4 +5,15 @@ export default defineConfig({
     port: 5273,
     host: true,
   },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes('node_modules/three')) {
+            return 'three-vendor';
+          }
+        },
+      },
+    },
+  },
 });
