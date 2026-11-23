@@ -9,6 +9,7 @@ import {
 import { InspectableMetadata, MiniMindScene } from './scene/MiniMindScene';
 import type { MicroLmUpdateMessage } from './workers/microLmWorker';
 import { MoeXrayPanel } from './ui/moeXray';
+import { DualArenaModal } from './ui/dualArena';
 import { archCompareKey, renderArchComparison } from './ui/archCompare';
 import { EXPERT_COLORS } from './expertColors';
 
@@ -241,8 +242,9 @@ class MiniMindVisualizerApp {
   private microLmPaused = false;
   private latestMicroLm: MicroLmUpdateMessage | null = null;
 
-  // MoE X-Ray panel + Dense vs MoE comparison card
+  // MoE X-Ray panel + Dense vs MoE comparison card + Dual Arena modal
   private xray: MoeXrayPanel;
+  private arena: DualArenaModal;
   private xrayOpenedByStory = false;
   private lastArchCmpKey = '';
 
@@ -250,6 +252,7 @@ class MiniMindVisualizerApp {
     const canvasContainer = document.getElementById('canvas-container')!;
     const labelsContainer = document.getElementById('labels-container')!;
     this.scene = new MiniMindScene(canvasContainer, labelsContainer);
+    this.arena = new DualArenaModal();
 
     this.xray = new MoeXrayPanel({
       onFocusChange: (focus) => {
@@ -364,6 +367,7 @@ class MiniMindVisualizerApp {
         this.setCardCollapsed('body-tokens', isSimple);
         this.setCardCollapsed('body-inspect', isSimple);
         this.xray.setLevel(isSimple);
+        this.arena.setLevel(isSimple);
         this.renderStoryScene();
         if (this.latestFrame) {
           this.onTelemetryFrame(this.latestFrame, this.wsConnected);
@@ -371,8 +375,8 @@ class MiniMindVisualizerApp {
       });
     });
 
-    // Architecture buttons
-    const archBtns = document.querySelectorAll<HTMLButtonElement>('#arch-switcher button');
+    // Architecture buttons (only match data-arch buttons, never #btn-xray or #btn-arena)
+    const archBtns = document.querySelectorAll<HTMLButtonElement>('#arch-switcher button[data-arch]');
     archBtns.forEach((btn) => {
       btn.addEventListener('click', () => {
         const arch = btn.dataset.arch as ArchitectureType;
@@ -387,6 +391,11 @@ class MiniMindVisualizerApp {
       } else {
         this.xray.open();
       }
+    });
+
+    // Dual Side-by-Side Live Arena modal
+    document.getElementById('btn-arena')!.addEventListener('click', () => {
+      this.arena.open();
     });
 
     // Stage buttons
@@ -542,7 +551,7 @@ class MiniMindVisualizerApp {
       btn.classList.toggle('active', btn.dataset.stage === frame.stage);
     });
 
-    const archBtns = document.querySelectorAll<HTMLButtonElement>('#arch-switcher button');
+    const archBtns = document.querySelectorAll<HTMLButtonElement>('#arch-switcher button[data-arch]');
     archBtns.forEach((btn) => {
       btn.classList.toggle('active', btn.dataset.arch === frame.architecture);
     });

@@ -1,6 +1,12 @@
 import { TelemetryFrame, TokenLayerRouting } from '@minimind-viz/shared';
 
 import { EXPERT_COLORS, SHARED_EXPERT_COLOR as SHARED_COLOR } from '../expertColors';
+import {
+  DOMAIN_META,
+  DOMAIN_ORDER,
+  DomainId,
+  MoeEmergenceUpdateMessage,
+} from '../workers/moeEmergenceCore';
 const IDLE_COLOR = '#475569';
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
@@ -82,7 +88,7 @@ export class MoeXrayPanel {
   private readonly chart = document.getElementById('xray-load-chart') as HTMLCanvasElement;
 
   private openState = false;
-  private tab: 'route' | 'balance' = 'route';
+  private tab: 'route' | 'balance' | 'emerge' = 'route';
   private isSimple = true;
   private layerIdx = 0;
   private hoverIdx: number | null = null;
@@ -94,6 +100,11 @@ export class MoeXrayPanel {
   private lastFocusKey = '';
   private lastRouteKey = '';
   private history: Array<{ step: number; loads: number[][] }> = [];
+
+  // Tab 3: Real MoE Emergence Web Worker state
+  private emergeWorker: Worker | null = null;
+  private lastEmergeSnap: MoeEmergenceUpdateMessage | null = null;
+  private emergeCardsBuilt = false;
 
   // SVG handles
   private rtoE: SVGPathElement[] = [];
@@ -139,6 +150,7 @@ export class MoeXrayPanel {
     cancelAnimationFrame(this.rafId);
     this.rafId = 0;
     this.lastFocusKey = '';
+    this.pauseEmergeWorker();
     this.cb.onFocusChange(null);
   }
 
@@ -146,6 +158,7 @@ export class MoeXrayPanel {
     this.isSimple = isSimple;
     this.lastRouteKey = '';
     if (this.frame) this.update(this.frame);
+    if (this.lastEmergeSnap) this.renderEmergeNote(this.lastEmergeSnap);
   }
 
   /** Feed every telemetry frame (before any micro-LM overlay, so `step` is the simulator's). */
@@ -164,7 +177,7 @@ export class MoeXrayPanel {
 
     document.getElementById('xray-layer-label')!.textContent = `L${this.layerIdx}`;
     if (this.tab === 'route') this.renderRoute(frame, focusIdx);
-    else this.renderBalance(frame);
+    else if (this.tab === 'balance') this.renderBalance(frame);
   }
 
   // ---------------------------------------------------------------- internals
@@ -185,13 +198,20 @@ export class MoeXrayPanel {
     document.getElementById('btn-xray-close')!.addEventListener('click', () => this.close());
     document.querySelectorAll<HTMLButtonElement>('#xray-tabs button').forEach((btn) => {
       btn.addEventListener('click', () => {
-        this.tab = btn.dataset.xtab === 'balance' ? 'balance' : 'route';
+        const nextTab = btn.dataset.xtab;
+        this.tab = nextTab === 'balance' ? 'balance' : nextTab === 'emerge' ? 'emerge' : 'route';
         document
           .querySelectorAll<HTMLButtonElement>('#xray-tabs button')
           .forEach((b) => b.classList.toggle('active', b === btn));
         document.getElementById('xray-route')!.classList.toggle('hidden', this.tab !== 'route');
         document.getElementById('xray-balance')!.classList.toggle('hidden', this.tab !== 'balance');
+        document.getElementById('xray-emerge')!.classList.toggle('hidden', this.tab !== 'emerge');
         this.lastRouteKey = '';
+        if (this.tab === 'emerge') {
+          this.ensureEmergeWorker();
+        } else {
+          this.pauseEmergeWorker();
+        }
         if (this.frame) this.update(this.frame);
       });
     });
@@ -200,6 +220,8 @@ export class MoeXrayPanel {
       this.cb.onSetAuxLoss(!enabled);
     });
     document.getElementById('btn-xray-fast')!.addEventListener('click', () => this.cb.onSpeed3x());
+
+    this.bindEmergeControls();
 
     // Layer strip (built once)
     this.layersEl.innerHTML = Array.from(
@@ -544,5 +566,259 @@ export class MoeXrayPanel {
     ctx.fillText(`bước ${hist[0].step}`, padL, h - 4);
     const lastLabel = `bước ${hist[hist.length - 1].step}`;
     ctx.fillText(lastLabel, Math.min(w - padR - ctx.measureText(lastLabel).width, xOf(hist.length - 1) - 20), h - 4);
+  }
+
+  // ---------------------------------------------------------------- Tab 3: Real Emergent MoE Lab
+
+  private ensureEmergeWorker(): void {
+    if (this.emergeWorker) return;
+    const worker = new Worker(new URL('../workers/moeEmergenceWorker.ts', import.meta.url), {
+      type: 'module',
+    });
+    worker.onmessage = (ev: MessageEvent<MoeEmergenceUpdateMessage>) => {
+      if (ev.data?.type === 'MOE_EMERGENCE_UPDATE') {
+        this.lastEmergeSnap = ev.data;
+        this.renderEmergence(ev.data);
+      }
+    };
+    this.emergeWorker = worker;
+    worker.postMessage({ type: 'INIT' });
+  }
+
+  private pauseEmergeWorker(): void {
+    if (this.emergeWorker) {
+      this.emergeWorker.postMessage({ type: 'PAUSE' });
+    }
+  }
+
+  private bindEmergeControls(): void {
+    document.getElementById('btn-emerge-toggle')!.addEventListener('click', () => {
+      this.ensureEmergeWorker();
+      const isRunning = this.lastEmergeSnap?.running ?? false;
+      this.emergeWorker?.postMessage({ type: isRunning ? 'PAUSE' : 'START' });
+    });
+
+    document.getElementById('btn-emerge-step')!.addEventListener('click', () => {
+      this.ensureEmergeWorker();
+      this.emergeWorker?.postMessage({ type: 'STEP_BATCH', count: 15 });
+    });
+
+    document.getElementById('btn-emerge-reseed')!.addEventListener('click', () => {
+      this.ensureEmergeWorker();
+      this.emergeWorker?.postMessage({ type: 'RESEED' });
+    });
+
+    document.getElementById('btn-emerge-aux')!.addEventListener('click', () => {
+      this.ensureEmergeWorker();
+      const curAux = this.lastEmergeSnap?.auxLossEnabled ?? true;
+      this.emergeWorker?.postMessage({ type: 'SET_AUX_LOSS', enabled: !curAux });
+    });
+
+    document.querySelectorAll<HTMLButtonElement>('#emerge-dom-pills .domain-pill').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        this.ensureEmergeWorker();
+        const dom = btn.dataset.domain as DomainId;
+        const enabledMap = this.lastEmergeSnap?.enabledDomains ?? {
+          geo: true,
+          code: true,
+          food: true,
+          math: true,
+        };
+        const currentlyOn = enabledMap[dom];
+        const activeCount = DOMAIN_ORDER.filter((d) => enabledMap[d]).length;
+        // Keep at least 1 active domain so the training batch never empties
+        if (currentlyOn && activeCount <= 1) return;
+        this.emergeWorker?.postMessage({ type: 'SET_DOMAIN', domain: dom, enabled: !currentlyOn });
+      });
+    });
+
+    const probeInput = document.getElementById('emerge-probe-input') as HTMLInputElement;
+    const sendProbe = () => {
+      this.ensureEmergeWorker();
+      this.emergeWorker?.postMessage({ type: 'SET_PROBE', sentence: probeInput.value });
+    };
+    document.getElementById('btn-emerge-probe')!.addEventListener('click', sendProbe);
+    probeInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') sendProbe();
+    });
+  }
+
+  private ensureEmergeCardsBuilt(): void {
+    if (this.emergeCardsBuilt) return;
+    this.emergeCardsBuilt = true;
+    const grid = document.getElementById('emerge-grid')!;
+    grid.innerHTML = Array.from({ length: 4 }, (_, e) => {
+      const segs = DOMAIN_ORDER.map(
+        (d) => `<div class="emerge-bar-seg" data-dom="${d}" style="width:25%;background:${DOMAIN_META[d].color}" title="${DOMAIN_META[d].label}"></div>`
+      ).join('');
+      return `
+        <div class="emerge-card" data-expert="${e}">
+          <div class="emerge-card-head">
+            <span class="emerge-card-title" style="color:${EXPERT_COLORS[e]}">Chuyên gia E${e} (<span class="emerge-load">25%</span>)</span>
+            <span class="emerge-card-badge">Chưa phân hóa</span>
+          </div>
+          <div class="emerge-bar">${segs}</div>
+          <div class="emerge-tokens"></div>
+        </div>
+      `;
+    }).join('');
+  }
+
+  private renderEmergence(snap: MoeEmergenceUpdateMessage): void {
+    this.ensureEmergeCardsBuilt();
+
+    // Update top buttons & stats in place
+    const toggleBtn = document.getElementById('btn-emerge-toggle')!;
+    toggleBtn.textContent = snap.running ? '⏸ Tạm dừng' : '▶ Bắt đầu Train';
+    toggleBtn.classList.toggle('running', snap.running);
+
+    const auxBtn = document.getElementById('btn-emerge-aux')!;
+    auxBtn.textContent = snap.auxLossEnabled ? 'Aux Loss thật: BẬT ✓' : 'Aux Loss thật: TẮT ✗';
+    auxBtn.className = `aux-toggle ${snap.auxLossEnabled ? 'on' : 'off'}`;
+
+    document.getElementById('emerge-stats')!.textContent =
+      `Step ${snap.step} • Seed #${snap.seed} • CE Loss: ${snap.ceLoss.toFixed(3)} • ` +
+      `Chuyên gia hiệu dụng: ${snap.effectiveExperts.toFixed(2)}/4 • Phân hóa: ${snap.specializationPct}%`;
+
+    // Sync domain pills
+    document.querySelectorAll<HTMLButtonElement>('#emerge-dom-pills .domain-pill').forEach((btn) => {
+      const d = btn.dataset.domain as DomainId;
+      btn.classList.toggle('active', Boolean(snap.enabledDomains[d]));
+    });
+
+    // Update 4 Expert Cards in-place
+    const grid = document.getElementById('emerge-grid')!;
+    snap.experts.forEach((exp, idx) => {
+      const card = grid.children[idx] as HTMLElement;
+      (card.querySelector('.emerge-load') as HTMLElement).textContent = `${exp.loadPct}%`;
+
+      const badge = card.querySelector('.emerge-card-badge') as HTMLElement;
+      if (exp.loadPct < 3) {
+        badge.textContent = '⚠ Bị bỏ đói (0 việc)';
+        badge.style.color = '#fda4af';
+        badge.style.background = 'rgba(244, 63, 94, 0.2)';
+      } else if (snap.step < 6 || !exp.dominantDomain || exp.purity < 0.36) {
+        badge.textContent = snap.step === 0 ? 'Ngẫu nhiên (25/25)' : 'Đang tự tìm cụm...';
+        badge.style.color = '#cbd5e1';
+        badge.style.background = 'rgba(51, 65, 85, 0.7)';
+      } else {
+        const meta = DOMAIN_META[exp.dominantDomain];
+        badge.textContent = `${meta.short} ${Math.round(exp.purity * 100)}%`;
+        badge.style.color = meta.color;
+        badge.style.background = 'rgba(15, 23, 42, 0.9)';
+      }
+
+      DOMAIN_ORDER.forEach((d) => {
+        const seg = card.querySelector(`.emerge-bar-seg[data-dom="${d}"]`) as HTMLElement;
+        seg.style.width = `${Math.round((exp.domainShares[d] || 0) * 100)}%`;
+      });
+
+      const tokBox = card.querySelector('.emerge-tokens') as HTMLElement;
+      tokBox.innerHTML = exp.topTokens
+        .slice(0, 5)
+        .map((t) => {
+          const c = DOMAIN_META[t.domain].color;
+          return `<span class="emerge-tok-chip" style="border-color:${c}88;background:${c}1a">${t.text}</span>`;
+        })
+        .join('');
+    });
+
+    this.drawEmergenceChart(snap);
+    this.renderProbeTokens(snap);
+    this.renderEmergeNote(snap);
+  }
+
+  private drawEmergenceChart(snap: MoeEmergenceUpdateMessage): void {
+    const canvas = document.getElementById('emerge-chart') as HTMLCanvasElement;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const w = canvas.width;
+    const h = canvas.height;
+    const padL = 32;
+    const padR = 32;
+    const padT = 8;
+    const padB = 14;
+    ctx.clearRect(0, 0, w, h);
+    ctx.font = '9.5px Inter, Segoe UI, sans-serif';
+
+    ctx.strokeStyle = 'rgba(148,163,184,0.16)';
+    ctx.beginPath();
+    ctx.moveTo(padL, h - padB);
+    ctx.lineTo(w - padR, h - padB);
+    ctx.stroke();
+
+    const hist = snap.history;
+    if (hist.length < 2) {
+      ctx.fillStyle = '#94a3b8';
+      ctx.fillText('Bấm ▶ Bắt đầu Train hoặc +15 Bước để quan sát sự tự phân hóa qua từng bước...', padL + 6, h / 2 + 3);
+      return;
+    }
+
+    const xOf = (i: number) => padL + (i / (hist.length - 1)) * (w - padL - padR);
+    const ySpec = (pct: number) => padT + (1 - Math.min(100, pct) / 100) * (h - padT - padB);
+    const maxLoss = Math.max(2.5, hist[0]?.ceLoss ?? 5.9);
+    const yLoss = (l: number) => padT + (1 - Math.min(maxLoss, l) / maxLoss) * (h - padT - padB);
+
+    // 1) CE Loss curve (cyan)
+    ctx.strokeStyle = '#38bdf8';
+    ctx.lineWidth = 1.8;
+    ctx.beginPath();
+    hist.forEach((pt, i) => {
+      if (i === 0) ctx.moveTo(xOf(i), yLoss(pt.ceLoss));
+      else ctx.lineTo(xOf(i), yLoss(pt.ceLoss));
+    });
+    ctx.stroke();
+
+    // 2) Specialization % curve (emerald)
+    ctx.strokeStyle = '#34d399';
+    ctx.lineWidth = 2.2;
+    ctx.beginPath();
+    hist.forEach((pt, i) => {
+      if (i === 0) ctx.moveTo(xOf(i), ySpec(pt.specializationPct));
+      else ctx.lineTo(xOf(i), ySpec(pt.specializationPct));
+    });
+    ctx.stroke();
+
+    ctx.fillStyle = '#34d399';
+    ctx.fillText(`${hist[hist.length - 1].specializationPct}%`, w - padR + 4, padT + 10);
+    ctx.fillStyle = '#38bdf8';
+    ctx.fillText(`${hist[hist.length - 1].ceLoss.toFixed(2)}`, 2, padT + 10);
+    ctx.fillStyle = '#64748b';
+    ctx.fillText(`Step ${hist[0].step}`, padL, h - 2);
+    ctx.fillText(`Step ${hist[hist.length - 1].step}`, w - padR - 42, h - 2);
+  }
+
+  private renderProbeTokens(snap: MoeEmergenceUpdateMessage): void {
+    const box = document.getElementById('emerge-probe-tokens')!;
+    box.innerHTML = snap.probe.tokens
+      .map((t) => {
+        const [ea, eb] = t.topExperts;
+        const [wa, wb] = t.weights;
+        return `
+          <div class="emerge-probe-tok">
+            <b>${t.text.replace(/</g, '&lt;')}</b>
+            <span>
+              <b style="color:${EXPERT_COLORS[ea]}">E${ea}</b>(${Math.round(wa * 100)}%) +
+              <b style="color:${EXPERT_COLORS[eb]}">E${eb}</b>(${Math.round(wb * 100)}%)
+            </span>
+          </div>
+        `;
+      })
+      .join('');
+  }
+
+  private renderEmergeNote(snap: MoeEmergenceUpdateMessage): void {
+    const noteEl = document.getElementById('emerge-note')!;
+    if (this.isSimple) {
+      noteEl.innerHTML =
+        `<b>🧠 Không hề có nhãn chủ đề đưa vào mô hình!</b> Ở Step 0, cả 4 chuyên gia đều là số ngẫu nhiên nên chia việc lộn xộn (~25% mỗi nhóm màu). ` +
+        `Khi dữ liệu chảy qua và <i>sai số đoán chữ (Backprop)</i> truyền ngược về Router, chuyên gia nào vô tình đoán đúng hơn một chút trên nhóm từ nào sẽ được gửi thêm từ nhóm đó → <b>càng làm càng giỏi</b> (vòng lặp tự củng cố). ` +
+        `Bấm <b>🎲 Đổi hạt giống</b> để kiểm chứng vai trò giữa E0..E3 tự đảo khác hẳn nhau!`;
+    } else {
+      noteEl.innerHTML =
+        `<b>🔬 Symmetry Breaking & Co-Adaptation (${snap.totalParams.toLocaleString()} params, Vocab ${snap.vocabSize}):</b> ` +
+        `Mạng nhận hoàn toàn ID từ thô qua causal context pooling (<code>0.4·E[w_t] + 0.6·mean(E[w_&lt;t])</code>), rồi đi qua <code>Softmax(W_g·x) → Top-2 → 4 Routed (H=7) + Shared (H=4)</code>. ` +
+        `Đạo hàm <code>dL_CE/dp_e = dh·o_e</code> kết hợp với <code>seq_aux (α=${snap.auxAlpha})</code> tự đẩy các từ có ngữ cảnh gần nhau về cùng chuyên gia — màu 4 nhóm chỉ dùng ở tầng Observer để đo độ thuần khiết.`;
+    }
   }
 }

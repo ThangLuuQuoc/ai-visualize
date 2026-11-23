@@ -59,12 +59,17 @@ D:\Projects\ClaudeDemo\AI-Visualize\
 │           ├── main.ts            # Kết nối WebSocket, đồng bộ nút điều khiển, HUD, Story Mode, nội dung Dễ hiểu / Chuyên sâu
 │           ├── expertColors.ts    # Màu cố định của 4 routed expert + shared (dùng chung 3D / SVG / biểu đồ)
 │           ├── ui/
-│           │   ├── moeXray.ts     # Panel "Soi 1 tầng MoE": sơ đồ SVG rẽ nhánh, công thức, routing 8 tầng, thí nghiệm Aux Loss
+│           │   ├── moeXray.ts     # Panel "Soi 1 tầng MoE" (max-height 54vh): sơ đồ SVG rẽ nhánh, thí nghiệm Aux Loss, và Tab ③ Chuyên gia tự hình thành
+│           │   ├── dualArena.ts   # Modal Đấu trường Train Song song Dense vs MoE (Iso-FLOPs 18 nơ-ron/từ, chạy/dừng & tua từng Epoch)
 │           │   └── archCompare.ts # Thẻ so sánh 3 cột: Dense nhỏ / MoE / Dense to (giả định)
 │           ├── scene/
 │           │   └── MiniMindScene.ts  # Scene Three.js: các khối 3D, hoạt ảnh 3 pha 60 FPS, camera bay theo giai đoạn, click để soi
 │           ├── workers/
-│           │   └── microLmWorker.ts  # Micro-LM train thật trong Web Worker (Backprop + Adam)
+│           │   ├── microLmWorker.ts      # Micro-LM train thật trong Web Worker (Backprop + Adam)
+│           │   ├── moeEmergenceCore.ts   # Lõi mạng 4-Expert Top-2 + Shared Expert không truyền nhãn chủ đề (Backprop + seq_aux thật)
+│           │   ├── moeEmergenceWorker.ts # Web Worker chạy Tab ③ "Chuyên gia tự hình thành"
+│           │   ├── dualArenaCore.ts      # Lõi train song song Dense (18/18) vs MoE (18 active / 32 total) lưu snapshot mỗi Epoch
+│           │   └── dualArenaWorker.ts    # Web Worker chạy Đấu trường Dense vs MoE
 │           └── styles.css
 ```
 

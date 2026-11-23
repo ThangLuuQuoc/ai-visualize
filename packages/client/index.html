@@ -37,6 +37,7 @@
             <button data-arch="dense" class="seg-btn">Dense (25.8M)</button>
             <button data-arch="moe" class="seg-btn active">MoE (145M / 45.2M Active)</button>
             <button id="btn-xray" class="xray-toggle-btn" title="Phóng to 1 tầng MoE: xem từng từ được chia cho chuyên gia nào, và thí nghiệm tắt Aux Loss">🔍 Soi 1 tầng MoE</button>
+            <button id="btn-arena" class="arena-toggle-btn" title="Mở Đấu trường Train Song song: chạy thật Dense và MoE cùng lúc, dừng & tua từng Epoch">⚔️ Dense vs MoE (Live)</button>
           </div>
         </div>
 
@@ -147,6 +148,7 @@
               <div class="segmented xray-tabs" id="xray-tabs">
                 <button data-xtab="route" class="seg-btn active">① 1 từ đi qua tầng này</button>
                 <button data-xtab="balance" class="seg-btn">② Thí nghiệm Aux Loss</button>
+                <button data-xtab="emerge" class="seg-btn">③ Chuyên gia tự hình thành</button>
               </div>
               <button id="btn-xray-close" class="icon-btn" title="Đóng">✕</button>
             </div>
@@ -172,6 +174,40 @@
               <canvas id="xray-load-chart" class="xray-load-chart" width="560" height="150"></canvas>
               <div id="xray-load-legend" class="xray-load-legend"></div>
               <div id="xray-balance-note" class="xray-note"></div>
+            </div>
+            <div id="xray-emerge" class="xray-section hidden">
+              <div class="emerge-controls">
+                <button id="btn-emerge-toggle" class="emerge-start-btn">▶ Bắt đầu Train</button>
+                <button id="btn-emerge-step" class="icon-btn" title="Chạy thêm 15 bước train thật">+15 Bước</button>
+                <button id="btn-emerge-reseed" class="icon-btn" title="Khởi tạo lại ngẫu nhiên từ đầu để thấy vai trò các chuyên gia tự đảo khác đi">🎲 Đổi hạt giống</button>
+                <button id="btn-emerge-aux" class="aux-toggle on" title="Bật/Tắt luật phạt cân bằng tải thật (seq_aux α=0.2)">Aux Loss thật: BẬT</button>
+              </div>
+              <div id="emerge-stats" class="mono-text emerge-stats">Step 0 • Seed #42 • CE Loss: 4.80 • Chuyên gia hiệu dụng: 4.00/4 • Phân hóa: 0%</div>
+              <div class="emerge-domains">
+                <span class="emerge-dom-label">Dòng dữ liệu train (màu chỉ để quan sát — mô hình KHÔNG được biết nhãn):</span>
+                <div class="emerge-dom-pills" id="emerge-dom-pills">
+                  <button data-domain="geo" class="domain-pill active" style="--dom-color:#38bdf8">🗺️ Địa lý</button>
+                  <button data-domain="code" class="domain-pill active" style="--dom-color:#c084fc">💻 Lập trình</button>
+                  <button data-domain="food" class="domain-pill active" style="--dom-color:#fbbf24">🍜 Ẩm thực</button>
+                  <button data-domain="math" class="domain-pill active" style="--dom-color:#34d399">🔢 Toán học</button>
+                </div>
+              </div>
+              <div id="emerge-grid" class="emerge-grid"></div>
+              <canvas id="emerge-chart" class="emerge-chart" width="560" height="78"></canvas>
+              <div class="emerge-chart-legend">
+                <span><b style="color:#34d399">━</b> Độ phân hóa chuyên gia (%)</span>
+                <span><b style="color:#38bdf8">━</b> CE Loss (giảm dần khi hiểu câu)</span>
+                <span id="emerge-chart-caption" style="color:#94a3b8">Train thật bằng Backprop + Adam trên trình duyệt</span>
+              </div>
+              <div class="emerge-probe">
+                <div class="emerge-probe-row">
+                  <span class="emerge-probe-label">Thử Router trên câu hỗn hợp:</span>
+                  <input id="emerge-probe-input" type="text" value="Hà Nội có Phở bò và Python tính Đạo hàm" />
+                  <button id="btn-emerge-probe" class="icon-btn">Thử</button>
+                </div>
+                <div id="emerge-probe-tokens" class="emerge-probe-tokens"></div>
+              </div>
+              <div id="emerge-note" class="xray-note"></div>
             </div>
           </div>
 
@@ -282,6 +318,86 @@
             </div>
           </section>
         </aside>
+      </div>
+    </div>
+
+    <!-- Fullscreen Side-by-Side Live Training Arena: Dense vs MoE (Iso-FLOPs) -->
+    <div id="arena-modal" class="arena-modal hidden">
+      <div class="arena-dialog">
+        <div class="arena-header">
+          <div class="arena-title-wrap">
+            <h2>⚔️ Đấu trường Train Song song: Dense vs. MoE (Chạy thật bằng Backprop + Adam)</h2>
+            <span id="arena-milestone" class="arena-milestone-pill">Epoch 0: Khởi tạo ngẫu nhiên</span>
+          </div>
+          <button id="btn-arena-close" class="icon-btn" title="Đóng Đấu trường">✕ Đóng</button>
+        </div>
+
+        <div class="arena-toolbar">
+          <div class="arena-toolbar-btns">
+            <button id="btn-arena-run" class="emerge-start-btn">▶ Chạy liên tục</button>
+            <button id="btn-arena-step" class="icon-btn" title="Train thêm đúng 1 lượt đọc hết 64 câu rồi tự dừng để quan sát">⏭ Chạy 1 Epoch rồi dừng</button>
+            <button id="btn-arena-reseed" class="icon-btn" title="Khởi tạo lại ngẫu nhiên cả 2 mạng">🎲 Đổi hạt giống</button>
+            <button id="btn-arena-aux" class="aux-toggle on" title="Bật/Tắt Aux Loss bên mạng MoE để xem hiệu ứng chia việc">Aux Loss MoE: BẬT ✓</button>
+          </div>
+          <div class="arena-scrubber">
+            <span class="arena-scrub-lbl">Tua Lịch sử:</span>
+            <input id="arena-epoch-slider" type="range" min="0" max="0" value="0" />
+            <span id="arena-epoch-readout" class="mono-text arena-epoch-readout">Epoch 0 / 0</span>
+          </div>
+        </div>
+
+        <div class="arena-probe-bar">
+          <span class="arena-probe-lbl">Cho CÙNG 1 từ đi qua cả 2 mạng ngay lúc này để so sánh bên trong Layer:</span>
+          <div id="arena-probe-btns" class="arena-probe-btns">
+            <button data-probe="geo" class="domain-pill active" style="--dom-color:#38bdf8">🗺️ "Hà Nội"</button>
+            <button data-probe="code" class="domain-pill" style="--dom-color:#c084fc">💻 "Python"</button>
+            <button data-probe="food" class="domain-pill" style="--dom-color:#fbbf24">🍜 "Phở"</button>
+            <button data-probe="math" class="domain-pill" style="--dom-color:#34d399">🔢 "Đạo hàm"</button>
+          </div>
+        </div>
+
+        <div class="arena-grid">
+          <!-- Left Column: Dense Layer -->
+          <div class="arena-col arena-col-dense">
+            <div class="arena-col-head">
+              <h3>Mạng DENSE (1 khối FFN duy nhất)</h3>
+              <span id="arena-dense-badge" class="arena-col-badge">18/18 nơ-ron/từ • CE Loss: 5.91</span>
+            </div>
+            <svg id="arena-dense-svg" class="arena-svg" viewBox="0 0 460 190" preserveAspectRatio="xMidYMid meet"></svg>
+            <div class="arena-subhead">Độ sáng 18 nơ-ron FFN (cùng 18 nơ-ron gánh mọi chủ đề):</div>
+            <div id="arena-dense-heat" class="arena-heat-grid"></div>
+            <div id="arena-dense-pred" class="arena-pred-strip"></div>
+            <div class="arena-subhead">Câu viết tiếp thật của Dense tại Epoch đang dừng:</div>
+            <div id="arena-dense-gen" class="arena-gen-list"></div>
+          </div>
+
+          <!-- Right Column: MoE Layer -->
+          <div class="arena-col arena-col-moe">
+            <div class="arena-col-head">
+              <h3>Mạng MoE (Router + Top-2/4 Experts + Shared)</h3>
+              <span id="arena-moe-badge" class="arena-col-badge">18 active / 32 total • CE Loss: 5.90</span>
+            </div>
+            <svg id="arena-moe-svg" class="arena-svg" viewBox="0 0 460 190" preserveAspectRatio="xMidYMid meet"></svg>
+            <div class="arena-subhead">4 Chuyên gia tự hình thành qua dữ liệu (màu chỉ để quan sát):</div>
+            <div id="arena-moe-experts" class="arena-moe-mini-grid"></div>
+            <div id="arena-moe-pred" class="arena-pred-strip"></div>
+            <div class="arena-subhead">Câu viết tiếp thật của MoE tại ĐÚNG CÙNG Epoch:</div>
+            <div id="arena-moe-gen" class="arena-gen-list"></div>
+          </div>
+        </div>
+
+        <div class="arena-bottom">
+          <div class="arena-chart-wrap">
+            <canvas id="arena-chart" class="arena-chart" width="680" height="108"></canvas>
+            <div class="arena-chart-legend">
+              <span><b style="color:#818cf8">━</b> CE Loss Dense</span>
+              <span><b style="color:#f59e0b">━</b> CE Loss MoE</span>
+              <span><b style="color:#34d399">━</b> Độ phân hóa MoE (%)</span>
+              <span style="color:#94a3b8">Vạch đứng = Epoch đang tua xem</span>
+            </div>
+          </div>
+          <div id="arena-summary" class="arena-summary"></div>
+        </div>
       </div>
     </div>
 
