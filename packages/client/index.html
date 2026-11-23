@@ -36,6 +36,7 @@
           <div class="segmented" id="arch-switcher">
             <button data-arch="dense" class="seg-btn">Dense (25.8M)</button>
             <button data-arch="moe" class="seg-btn active">MoE (145M / 45.2M Active)</button>
+            <button id="btn-xray" class="xray-toggle-btn" title="Phóng to 1 tầng MoE: xem từng từ được chia cho chuyên gia nào, và thí nghiệm tắt Aux Loss">🔍 Soi 1 tầng MoE</button>
           </div>
         </div>
 
@@ -139,6 +140,41 @@
 
         <!-- Center Bottom Story Mode Director Bar -->
         <div class="hud-center-column">
+          <!-- MoE X-Ray: one layer, one token at a time -->
+          <div id="xray-panel" class="xray-panel hidden">
+            <div class="xray-header">
+              <h3>🔍 Soi tầng MoE <span id="xray-layer-label" class="xray-layer-pill">L0</span></h3>
+              <div class="segmented xray-tabs" id="xray-tabs">
+                <button data-xtab="route" class="seg-btn active">① 1 từ đi qua tầng này</button>
+                <button data-xtab="balance" class="seg-btn">② Thí nghiệm Aux Loss</button>
+              </div>
+              <button id="btn-xray-close" class="icon-btn" title="Đóng">✕</button>
+            </div>
+            <div id="xray-route" class="xray-section">
+              <div class="xray-row-label">
+                <span>Chọn từ (rê chuột để xem, click để ghim):</span>
+                <span id="xray-focus-mode" class="xray-focus-mode"></span>
+              </div>
+              <div id="xray-tokens" class="xray-tokens"></div>
+              <svg id="xray-svg" class="xray-svg" viewBox="0 0 600 270" preserveAspectRatio="xMidYMid meet"></svg>
+              <div id="xray-formula" class="xray-formula"></div>
+              <div id="xray-note" class="xray-note"></div>
+              <div class="xray-row-label"><span id="xray-layers-caption">Cùng từ này ở 8 tầng (mỗi tầng có Router riêng):</span></div>
+              <div id="xray-layers" class="xray-layers"></div>
+              <div id="xray-sentence" class="xray-sentence"></div>
+            </div>
+            <div id="xray-balance" class="xray-section hidden">
+              <div class="xray-balance-controls">
+                <button id="btn-aux-toggle" class="aux-toggle on">Aux Loss: BẬT</button>
+                <button id="btn-xray-fast" class="icon-btn" title="Mô phỏng chạy nhanh gấp 3 để thấy diễn biến qua nhiều bước">⏩ Xem nhanh 3×</button>
+                <span id="xray-balance-stats" class="mono-text xray-balance-stats"></span>
+              </div>
+              <canvas id="xray-load-chart" class="xray-load-chart" width="560" height="150"></canvas>
+              <div id="xray-load-legend" class="xray-load-legend"></div>
+              <div id="xray-balance-note" class="xray-note"></div>
+            </div>
+          </div>
+
           <div id="story-bar" class="story-bar">
             <div class="story-header">
               <span id="story-step-badge" class="story-step-badge">CẢNH 1 / 8</span>
@@ -213,6 +249,17 @@
               </div>
 
               <canvas id="loss-chart" width="330" height="82"></canvas>
+            </div>
+          </section>
+
+          <!-- Card: Dense vs MoE trade-off (3 columns incl. a hypothetical Dense of equal total size) -->
+          <section class="hud-card" id="card-archcmp">
+            <div class="card-header collapsible-trigger" data-target="body-archcmp">
+              <h2><span class="caret">▾</span> ⚖️ Dense hay MoE — đánh đổi gì?</h2>
+              <span id="archcmp-badge" class="tag-badge">PRETRAIN</span>
+            </div>
+            <div id="body-archcmp" class="card-collapsible">
+              <div id="archcmp-body"></div>
             </div>
           </section>
 

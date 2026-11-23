@@ -8,6 +8,9 @@ import {
 } from '@minimind-viz/shared';
 import { InspectableMetadata, MiniMindScene } from './scene/MiniMindScene';
 import type { MicroLmUpdateMessage } from './workers/microLmWorker';
+import { MoeXrayPanel } from './ui/moeXray';
+import { archCompareKey, renderArchComparison } from './ui/archCompare';
+import { EXPERT_COLORS } from './expertColors';
 
 interface StageCopy {
   simpleHint: string;
@@ -24,6 +27,8 @@ interface StorySceneStep {
   camLook: [number, number, number];
   simpleText: string;
   technicalText: string;
+  /** Open the MoE X-Ray panel on this layer for this scene (closed again when leaving the scene). */
+  xrayLayer?: number;
 }
 
 const STORY_SCENES: StorySceneStep[] = [
@@ -61,15 +66,16 @@ const STORY_SCENES: StorySceneStep[] = [
       'Grouped-Query Attention (8 Query Heads chia sẻ 2 Key/Value Heads) giảm 75% dung lượng KV Cache trong giai đoạn suy luận (Inference) và bước sinh mẫu Rollout của GRPO.',
   },
   {
-    title: '4/8 — MoE: Lễ tân bệnh viện & 4 Bác sĩ chuyên khoa',
+    title: '4/8 — MoE: Lễ tân bệnh viện & 4 Chuyên gia',
     stage: 'pretrain',
     arch: 'moe',
     camPos: [15, 11, -6],
     camLook: [0, 1.5, -15],
+    xrayLayer: 2,
     simpleText:
-      'Quả cầu cam là Lễ tân (Router). Với mỗi từ đi vào, Lễ tân chỉ bật đèn gọi đúng 2 trong 4 Bác sĩ chuyên khoa (khối cam sáng) kết hợp với 1 Bác sĩ đa khoa (trụ xanh lá ở giữa). Nhờ vậy mô hình có 145 triệu núm vặn nhưng chỉ tốn sức bằng mạng 45 triệu!',
+      'Đang soi cận cảnh 1 tầng. Quả cầu cam là Lễ tân (Router): với mỗi từ, nó chọn đúng 2 trong 4 chuyên gia, còn chuyên gia chung (xanh lá) luôn làm. Rê chuột lên từng từ trong khung "Soi tầng MoE" để xem từ đó rẽ nhánh đi đâu. Mỗi tầng có Router riêng nên chọn khác nhau. Thẻ ⚖️ bên phải cho thấy cái lợi: kiến thức của mạng 145M nhưng mỗi từ chỉ tốn sức như 45M.',
     technicalText:
-      'MiniMind2-MoE gồm 1 Shared Expert + 4 Routed Experts (Top-2 gating). Tổng tham số đạt 145.0M nhưng mỗi token chỉ kích hoạt 45.2M tham số, kèm Aux Loss giữ cân bằng tải.',
+      'MiniMind2-MoE: 1 Shared + 4 Routed Experts, softmax gate → Top-2 → chuẩn hóa trọng số. Mỗi tầng một gate riêng. 145.0M tổng tham số, 45.2M kích hoạt/token. Tab ② của panel X-Ray: tắt aux loss (α=0.1) để thấy load collapse diễn ra dần qua các step.',
   },
   {
     title: '5/8 — Giai đoạn 1 (Pretrain): Đọc hết cả thư viện sách',
@@ -235,16 +241,35 @@ class MiniMindVisualizerApp {
   private microLmPaused = false;
   private latestMicroLm: MicroLmUpdateMessage | null = null;
 
+  // MoE X-Ray panel + Dense vs MoE comparison card
+  private xray: MoeXrayPanel;
+  private xrayOpenedByStory = false;
+  private lastArchCmpKey = '';
+
   constructor() {
     const canvasContainer = document.getElementById('canvas-container')!;
     const labelsContainer = document.getElementById('labels-container')!;
     this.scene = new MiniMindScene(canvasContainer, labelsContainer);
+
+    this.xray = new MoeXrayPanel({
+      onFocusChange: (focus) => {
+        this.scene.setMoeFocus(focus);
+        document.getElementById('btn-xray')!.classList.toggle('active', focus !== null);
+        if (!focus) this.xrayOpenedByStory = false;
+      },
+      onSetAuxLoss: (enabled) => this.sendCommand({ type: 'SET_AUX_LOSS', auxLossEnabled: enabled }),
+      onSpeed3x: () => this.sendCommand({ type: 'SET_SPEED', speed: 3 }),
+    });
 
     this.scene.onNodeSelected((meta, frame) => {
       this.selectedMeta = meta;
       // Auto-expand the 3D Inspector card when the user clicks a 3D object
       this.setCardCollapsed('body-inspect', false);
       this.renderInspector(meta, frame);
+      // Clicking a router or expert opens the X-Ray on that layer
+      if ((meta.kind === 'moe_router' || meta.kind === 'moe_expert') && frame?.architecture === 'moe') {
+        this.xray.open(meta.layerIdx);
+      }
     });
 
     this.bindUIEvents();
@@ -338,6 +363,7 @@ class MiniMindVisualizerApp {
         const isSimple = this.explanationLevel === 'simple';
         this.setCardCollapsed('body-tokens', isSimple);
         this.setCardCollapsed('body-inspect', isSimple);
+        this.xray.setLevel(isSimple);
         this.renderStoryScene();
         if (this.latestFrame) {
           this.onTelemetryFrame(this.latestFrame, this.wsConnected);
@@ -352,6 +378,15 @@ class MiniMindVisualizerApp {
         const arch = btn.dataset.arch as ArchitectureType;
         this.sendCommand({ type: 'SET_ARCH', architecture: arch });
       });
+    });
+
+    // MoE X-Ray toggle
+    document.getElementById('btn-xray')!.addEventListener('click', () => {
+      if (this.xray.isOpen()) {
+        this.xray.close();
+      } else {
+        this.xray.open();
+      }
     });
 
     // Stage buttons
@@ -484,12 +519,20 @@ class MiniMindVisualizerApp {
     this.renderStoryScene();
     const s = STORY_SCENES[this.storyIdx];
     // Fly first (and tell the scene to skip its automatic stage camera), then switch stage/arch.
+    if (this.xrayOpenedByStory && s.xrayLayer === undefined) {
+      this.xray.close();
+    }
     this.scene.flyCameraForStory(s.camPos, s.camLook, s.stage);
     if (s.arch) {
       this.sendCommand({ type: 'SET_ARCH', architecture: s.arch });
     }
     if (s.stage) {
       this.sendCommand({ type: 'SET_STAGE', stage: s.stage });
+    }
+    if (s.xrayLayer !== undefined) {
+      // After SET_ARCH so the panel opens on an MoE frame; the X-Ray camera wins over the story camera.
+      this.xray.open(s.xrayLayer);
+      this.xrayOpenedByStory = true;
     }
   }
 
@@ -567,6 +610,18 @@ class MiniMindVisualizerApp {
     const frame = this.mergeMicroLmOverlay(rawFrame);
     this.syncControlsWithFrame(frame);
     this.scene.updateFromTelemetry(frame);
+
+    // MoE X-Ray: only meaningful for the MoE architecture
+    const btnXray = document.getElementById('btn-xray') as HTMLButtonElement;
+    btnXray.disabled = rawFrame.architecture !== 'moe';
+    btnXray.title =
+      rawFrame.architecture === 'moe'
+        ? 'Phóng to 1 tầng MoE: xem từng từ được chia cho chuyên gia nào, và thí nghiệm tắt Aux Loss'
+        : 'Chỉ có ở kiến trúc MoE';
+    if (rawFrame.architecture !== 'moe' && this.xray.isOpen()) {
+      this.xray.close();
+    }
+    this.xray.update(rawFrame);
 
     const isSimple = this.explanationLevel === 'simple';
 
@@ -654,6 +709,13 @@ class MiniMindVisualizerApp {
 
     this.renderVramBreakdownInPlace(frame);
 
+    const cmpKey = archCompareKey(frame, isSimple);
+    if (cmpKey !== this.lastArchCmpKey) {
+      this.lastArchCmpKey = cmpKey;
+      document.getElementById('archcmp-badge')!.textContent = frame.stage.toUpperCase();
+      renderArchComparison(document.getElementById('archcmp-body')!, frame, isSimple);
+    }
+
     const lastLoss = this.lossHistory[this.lossHistory.length - 1];
     if (lastLoss === undefined || Math.abs(lastLoss - frame.loss) > 0.0005) {
       this.lossHistory.push(frame.loss);
@@ -731,7 +793,7 @@ class MiniMindVisualizerApp {
       (chip.querySelector('.tok-text') as HTMLElement).textContent = t.text;
       const routingInfo =
         frame.architecture === 'moe'
-          ? `E${t.activeExperts.join(',E')}`
+          ? `L0→E${t.activeExperts.join('+E')}`
           : `m=${t.positionIdx} (${t.ropeAngleRad}r)`;
       (chip.querySelector('.token-meta') as HTMLElement).textContent = t.lossMasked
         ? isSimple
@@ -892,21 +954,24 @@ class MiniMindVisualizerApp {
     if (frame.architecture === 'moe') {
       const l0 = frame.layers[0];
       titleEl.innerHTML = `${caretHtml} ${
-        isSimple ? '4 Bác sĩ Chuyên khoa MoE & Soi 3D' : 'MoE Routed Expert Load & 3D Inspector'
+        isSimple ? 'Tải 4 Chuyên gia MoE (tầng L0) & Soi 3D' : 'MoE Expert Load (L0) & 3D Inspector'
       }`;
-      badgeEl.textContent = `Aux Loss: ${l0?.auxLoss ?? 0}`;
+      const bal = frame.moeBalance;
+      badgeEl.textContent = `Aux ${l0?.auxLoss ?? 0}${bal ? ` · ${bal.effectiveExperts.toFixed(1)}/4 CG` : ''}${
+        bal && !bal.auxLossEnabled ? ' · TẮT' : ''
+      }`;
       const activeToken = frame.currentTokens[frame.activeTokenIdx];
       const loads = l0?.expertLoads || [];
       this.ensureBarRows(bodyEl, loads.length);
       loads.forEach((load, eIdx) => {
         const isTop = activeToken?.activeExperts.includes(eIdx);
-        const pct = Math.min(100, Math.round(load * 240));
-        const color = isTop ? '#f59e0b' : '#38bdf8';
+        // Top-2 => one expert can take at most 50% of assignments, so 50% fills the bar.
+        const pct = Math.min(100, Math.round(load * 200));
         this.updateBarRow(
           bodyEl.children[eIdx] as HTMLElement,
           `Chuyên gia E${eIdx} ${isTop ? '⚡' : ''}`,
           pct,
-          color,
+          EXPERT_COLORS[eIdx],
           `${Math.round(load * 100)}%`
         );
       });

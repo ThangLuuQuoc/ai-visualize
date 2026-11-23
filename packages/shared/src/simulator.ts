@@ -1,4 +1,5 @@
 import {
+  ArchFootprint,
   ArchitectureType,
   ControlCommand,
   DEFAULT_MINIMIND_CONFIG,
@@ -7,7 +8,9 @@ import {
   NextTokenPredictionDemo,
   RlTelemetry,
   StageAnswerSample,
+  MoeBalanceTelemetry,
   TelemetryFrame,
+  TokenLayerRouting,
   TokenStepInfo,
   TrainingStage,
   VramBreakdown,
@@ -91,6 +94,33 @@ function buildStageAnswers(trainablePct: number): StageAnswerSample[] {
   ];
 }
 
+/** Deterministic hash -> [0, 1). Same inputs always give the same "router opinion". */
+function hash01(a: number, b: number, c: number, d: number): number {
+  let h = Math.imul(a ^ 0x9e3779b9, 0x85ebca6b);
+  h = Math.imul(h ^ (b + 0x632be5ab), 0xc2b2ae35);
+  h = Math.imul(h ^ (c + 0x27d4eb2f), 0x165667b1);
+  h = Math.imul(h ^ (d + 0x7f4a7c15), 0x85ebca6b);
+  h ^= h >>> 15;
+  h = Math.imul(h, 0x2c1b3c6d);
+  h ^= h >>> 13;
+  return (h >>> 0) / 4294967296;
+}
+
+/** MiniMind2 aux_loss_alpha (model_minimind.py, MiniMindConfig default). */
+const AUX_ALPHA = 0.1;
+/** Virtual batch used to estimate per-layer expert load each step (the visible sentence is only 10 tokens). */
+const LOAD_BATCH_TOKENS = 64;
+
+/**
+ * The 2 experts each layer drifts towards when the router trains without aux loss.
+ * In reality which experts "win" is an accident of initialisation; here it is fixed per layer.
+ */
+export function favouredExpertPair(layerIdx: number, numExperts = 4): [number, number] {
+  const a = layerIdx % numExperts;
+  const b = (a + 1 + (layerIdx % (numExperts - 1))) % numExperts;
+  return [a, b];
+}
+
 export class MiniMindSimulator {
   private config: MiniMindModelConfig = { ...DEFAULT_MINIMIND_CONFIG };
   private stage: TrainingStage = 'pretrain';
@@ -98,8 +128,79 @@ export class MiniMindSimulator {
   private cycleSeconds = 0;
   private paused = false;
   private speed = 1.0;
+  // MoE load-balancing experiment: start slightly unbalanced so aux loss is seen pulling it back.
+  private auxLossEnabled = true;
+  private static readonly INITIAL_COLLAPSE = 0.3;
+  private collapse = MiniMindSimulator.INITIAL_COLLAPSE;
 
   public readonly STEP_DURATION_SEC = 4.8;
+
+  /**
+   * Params, VRAM and throughput for one architecture at one stage.
+   * Shared by buildFrame() and the Dense vs MoE comparison card so both always agree.
+   */
+  public static computeFootprint(
+    architecture: ArchitectureType,
+    stage: TrainingStage,
+    loraRank = DEFAULT_MINIMIND_CONFIG.loraRank,
+    numLayers = DEFAULT_MINIMIND_CONFIG.numLayers
+  ): ArchFootprint {
+    const isMoE = architecture === 'moe';
+    // Authentic MiniMind2 repository specifications:
+    // - MiniMind2-Small (Dense): hidden_size=512, num_layers=8, vocab=6400 -> 25.8M parameters
+    // - MiniMind2-MoE: hidden_size=640, num_layers=8, 4 Routed + 1 Shared (Top-2) -> 145.0M total / 45.2M active
+    const totalParamsM = isMoE ? 145.0 : 25.8;
+    const activeParamsM = isMoE ? 45.2 : 25.8;
+    // MiniMind's apply_lora() only wraps *square* nn.Linear layers (in_features == out_features).
+    // With GQA (8Q : 2KV), k_proj/v_proj are not square, nor are FFN/MoE/lm_head, so per layer
+    // only q_proj and o_proj (d -> d) get LoRA. Each adds A[d×r] + B[r×d] = 2·r·d params.
+    // Total = layers × 2 matrices × 2·r·d (r = 8):
+    //   Dense (d=512): 8 × 2 × 2 × 8 × 512 = 131,072 ≈ 0.13M (0.51% of 25.8M)
+    //   MoE   (d=640): 8 × 2 × 2 × 8 × 640 = 163,840 ≈ 0.16M (0.11% of 145.0M)
+    const loraDim = isMoE ? 640 : 512;
+    const loraParamsM = Number(((numLayers * 2 * 2 * loraRank * loraDim) / 1e6).toFixed(2));
+    const loraPct = Number(((loraParamsM / totalParamsM) * 100).toFixed(2));
+    const trainableParamsM = stage === 'lora' ? loraParamsM : totalParamsM;
+    const trainablePct = Number(((trainableParamsM / totalParamsM) * 100).toFixed(2));
+
+    // Exact Mixed-Precision (bfloat16 weights/grads + FP32 AdamW master/m/v) VRAM breakdown:
+    // - Model Weights (bf16): 2 bytes/param
+    // - Gradients (bf16): 2 bytes/trainable_param
+    // - AdamW Optimizer States (FP32 master copy 4B + FP32 momentum m 4B + FP32 variance v 4B): 12 bytes/trainable_param
+    // - Frozen Reference Model (bf16, only in DPO & GRPO): 2 bytes/param (separated into its own segment!)
+    const weightsMB = Math.round(totalParamsM * 2);
+    const gradientsMB = Math.max(2, Math.round(trainableParamsM * 2));
+    const optimizerMB = Math.max(8, Math.round(trainableParamsM * 12));
+    const isRl = stage === 'rl_dpo' || stage === 'rl_grpo';
+    const refModelMB = isRl ? weightsMB : 0;
+
+    let activationsMB = isMoE ? 540 : 320;
+    let tokensPerSec = isMoE ? 18400 : 26500;
+    if (stage === 'lora') {
+      activationsMB = isMoE ? 420 : 250;
+      // Modest ~13% throughput increase since Forward and Activation-Backward still traverse the full network
+      tokensPerSec = isMoE ? 20800 : 29800;
+    } else if (stage === 'rl_dpo') {
+      activationsMB = isMoE ? 640 : 410;
+      tokensPerSec = isMoE ? 11200 : 15800;
+    } else if (stage === 'rl_grpo') {
+      // Group sampling G=4 increases activation & KV cache footprint, but avoids a Critic model
+      activationsMB = isMoE ? 820 : 530;
+      tokensPerSec = isMoE ? 8900 : 12400;
+    }
+
+    const totalMB = weightsMB + gradientsMB + optimizerMB + refModelMB + activationsMB;
+    return {
+      architecture,
+      totalParamsM,
+      activeParamsM,
+      trainableParamsM,
+      trainablePct,
+      loraPct,
+      vramBreakdown: { weightsMB, gradientsMB, optimizerMB, refModelMB, activationsMB, totalMB },
+      tokensPerSec,
+    };
+  }
 
   public getConfig(): MiniMindModelConfig {
     return this.config;
@@ -163,14 +264,100 @@ export class MiniMindSimulator {
         this.cycleSeconds += this.STEP_DURATION_SEC / 3;
         if (this.cycleSeconds >= this.STEP_DURATION_SEC) {
           this.cycleSeconds = 0;
-          this.step += 1;
+          this.advanceStep();
         }
         break;
       case 'RESET':
         this.step = 1;
         this.cycleSeconds = 0;
+        this.collapse = MiniMindSimulator.INITIAL_COLLAPSE;
+        break;
+      case 'SET_AUX_LOSS':
+        if (typeof cmd.auxLossEnabled === 'boolean') {
+          this.auxLossEnabled = cmd.auxLossEnabled;
+        }
         break;
     }
+  }
+
+  /**
+   * One optimizer step. Also evolves MoE load balance:
+   * - Without aux loss the router drifts "rich get richer": experts picked more often get more
+   *   gradient, become better, and get picked even more. Logistic growth => slow start, then fast.
+   * - With aux loss the penalty pulls the load back towards uniform.
+   * - In LoRA the gate is frozen (apply_lora only touches q_proj/o_proj), so nothing changes.
+   */
+  private advanceStep(): void {
+    this.step += 1;
+    if (this.config.architecture !== 'moe' || this.stage === 'lora') return;
+    if (this.auxLossEnabled) {
+      this.collapse *= 0.82;
+    } else {
+      this.collapse += 0.2 * (this.collapse + 0.1) * (1 - this.collapse);
+    }
+    this.collapse = Math.min(1, Math.max(0, this.collapse));
+  }
+
+  /**
+   * MiniMind2 MoEGate for one token in one layer:
+   * scores = softmax(gate(x)) -> topk(k=2) -> renormalize the 2 weights (norm_topk_prob=True).
+   * gate(x) is faked with a deterministic hash of (token, position, layer, expert) so it is stable
+   * across frames, differs per layer, and is biased towards the favoured pair as `collapse` grows.
+   */
+  private routeToken(seedA: number, seedB: number, layerIdx: number): TokenLayerRouting {
+    const n = this.config.numRoutedExperts;
+    const k = this.config.numExpertsPerTok;
+    const fav = favouredExpertPair(layerIdx, n);
+    const logits = Array.from({ length: n }, (_, e) => {
+      const base = (hash01(seedA, seedB, layerIdx, e) * 2 - 1) * 1.6;
+      return base + (fav.includes(e) ? this.collapse * 4.5 : 0);
+    });
+    const maxL = Math.max(...logits);
+    const exps = logits.map((l) => Math.exp(l - maxL));
+    const sum = exps.reduce((a, b) => a + b, 0);
+    const gateProbs = exps.map((v) => v / sum);
+    const experts = gateProbs
+      .map((p, e) => ({ p, e }))
+      .sort((a, b) => b.p - a.p)
+      .slice(0, k)
+      .map((x) => x.e);
+    const topSum = experts.reduce((acc, e) => acc + gateProbs[e], 0);
+    const w0 = Number((gateProbs[experts[0]] / topSum).toFixed(2));
+    const weights =
+      k === 2
+        ? [w0, Number((1 - w0).toFixed(2))]
+        : experts.map((e) => Number((gateProbs[e] / topSum).toFixed(2)));
+    return {
+      gateProbs: gateProbs.map((p) => Number(p.toFixed(3))),
+      experts,
+      weights,
+    };
+  }
+
+  /**
+   * Per-layer expert load over a virtual batch, plus MiniMind2's seq_aux loss:
+   *   ce_i = count_i / (T·k / N)   (1.0 when perfectly balanced)
+   *   P_i  = mean softmax score of expert i
+   *   aux  = alpha · Σ ce_i · P_i  (≈ alpha balanced, ≈ 2·alpha when 2 of 4 experts take everything)
+   */
+  private computeLayerLoad(layerIdx: number): { loads: number[]; auxLoss: number } {
+    const n = this.config.numRoutedExperts;
+    const k = this.config.numExpertsPerTok;
+    const counts = new Array<number>(n).fill(0);
+    const probSums = new Array<number>(n).fill(0);
+    for (let t = 0; t < LOAD_BATCH_TOKENS; t++) {
+      const r = this.routeToken(10_000 + this.step * 131 + t, t, layerIdx);
+      r.experts.forEach((e) => (counts[e] += 1));
+      r.gateProbs.forEach((p, e) => (probSums[e] += p));
+    }
+    const totalAssign = LOAD_BATCH_TOKENS * k;
+    const loads = counts.map((c) => Number((c / totalAssign).toFixed(3)));
+    const auxLoss =
+      counts.reduce(
+        (acc, c, e) => acc + (c / (totalAssign / n)) * (probSums[e] / LOAD_BATCH_TOKENS),
+        0
+      ) * AUX_ALPHA;
+    return { loads, auxLoss: Number(auxLoss.toFixed(4)) };
   }
 
   public tick(dtSeconds = 0.12): TelemetryFrame {
@@ -178,7 +365,7 @@ export class MiniMindSimulator {
       this.cycleSeconds += dtSeconds * this.speed;
       while (this.cycleSeconds >= this.STEP_DURATION_SEC) {
         this.cycleSeconds -= this.STEP_DURATION_SEC;
-        this.step += 1;
+        this.advanceStep();
       }
     }
     return this.buildFrame();
@@ -208,68 +395,26 @@ export class MiniMindSimulator {
       this.STEP_DURATION_SEC
     );
 
-    // Authentic MiniMind2 repository specifications:
-    // - MiniMind2-Small (Dense): hidden_size=512, num_layers=8, vocab=6400 -> 25.8M parameters
-    // - MiniMind2-MoE: hidden_size=640, num_layers=8, 4 Routed + 1 Shared (Top-2) -> 145.0M total / 45.2M active
-    const totalParamsM = isMoE ? 145.0 : 25.8;
-    const activeParamsM = isMoE ? 45.2 : 25.8;
-    // MiniMind's apply_lora() only wraps *square* nn.Linear layers (in_features == out_features).
-    // With GQA (8Q : 2KV), k_proj/v_proj are not square, nor are FFN/MoE/lm_head, so per layer
-    // only q_proj and o_proj (d -> d) get LoRA. Each adds A[d×r] + B[r×d] = 2·r·d params.
-    // Total = layers × 2 matrices × 2·r·d (r = 8):
-    //   Dense (d=512): 8 × 2 × 2 × 8 × 512 = 131,072 ≈ 0.13M (0.51% of 25.8M)
-    //   MoE   (d=640): 8 × 2 × 2 × 8 × 640 = 163,840 ≈ 0.16M (0.11% of 145.0M)
-    const loraRank = this.config.loraRank;
-    const loraDim = isMoE ? 640 : 512;
-    const loraParamsM = Number(
-      ((this.config.numLayers * 2 * 2 * loraRank * loraDim) / 1e6).toFixed(2)
+    const fp = MiniMindSimulator.computeFootprint(
+      this.config.architecture,
+      this.stage,
+      this.config.loraRank,
+      this.config.numLayers
     );
-    const loraPct = Number(((loraParamsM / totalParamsM) * 100).toFixed(2));
-    const trainableParamsM = this.stage === 'lora' ? loraParamsM : totalParamsM;
-    const trainablePct = Number(((trainableParamsM / totalParamsM) * 100).toFixed(2));
-
-    // Exact Mixed-Precision (bfloat16 weights/grads + FP32 AdamW master/m/v) VRAM breakdown:
-    // - Model Weights (bf16): 2 bytes/param
-    // - Gradients (bf16): 2 bytes/trainable_param
-    // - AdamW Optimizer States (FP32 master copy 4B + FP32 momentum m 4B + FP32 variance v 4B): 12 bytes/trainable_param
-    // - Frozen Reference Model (bf16, only in DPO & GRPO): 2 bytes/param (separated into its own segment!)
-    const weightsMB = Math.round(totalParamsM * 2);
-    const gradientsMB = Math.max(2, Math.round(trainableParamsM * 2));
-    const optimizerMB = Math.max(8, Math.round(trainableParamsM * 12));
+    const { totalParamsM, activeParamsM, trainableParamsM, trainablePct, loraPct, vramBreakdown, tokensPerSec } =
+      fp;
+    const vramUsedMB = vramBreakdown.totalMB;
     const isRl = this.stage === 'rl_dpo' || this.stage === 'rl_grpo';
-    const refModelMB = isRl ? weightsMB : 0;
-
-    let activationsMB = isMoE ? 540 : 320;
-    let baseLr = 5e-4;
-    let tokensPerSec = isMoE ? 18400 : 26500;
-
-    if (this.stage === 'sft') {
-      baseLr = 5e-5;
-    } else if (this.stage === 'lora') {
-      activationsMB = isMoE ? 420 : 250;
-      baseLr = 1e-4;
-      // Modest ~13% throughput increase since Forward and Activation-Backward still traverse the full network
-      tokensPerSec = isMoE ? 20800 : 29800;
-    } else if (this.stage === 'rl_dpo') {
-      baseLr = 5e-6;
-      activationsMB = isMoE ? 640 : 410;
-      tokensPerSec = isMoE ? 11200 : 15800;
-    } else if (this.stage === 'rl_grpo') {
-      baseLr = 2e-6;
-      // Group sampling G=4 increases activation & KV cache footprint, but avoids a Critic model
-      activationsMB = isMoE ? 820 : 530;
-      tokensPerSec = isMoE ? 8900 : 12400;
-    }
-
-    const vramUsedMB = weightsMB + gradientsMB + optimizerMB + refModelMB + activationsMB;
-    const vramBreakdown: VramBreakdown = {
-      weightsMB,
-      gradientsMB,
-      optimizerMB,
-      refModelMB,
-      activationsMB,
-      totalMB: vramUsedMB,
-    };
+    const baseLr =
+      this.stage === 'sft'
+        ? 5e-5
+        : this.stage === 'lora'
+          ? 1e-4
+          : this.stage === 'rl_dpo'
+            ? 5e-6
+            : this.stage === 'rl_grpo'
+              ? 2e-6
+              : 5e-4;
 
     const progress = Math.min(1, (this.step - 1) / 35);
     const cosineFactor = 0.1 + 0.9 * 0.5 * (1 + Math.cos(Math.PI * progress));
@@ -286,13 +431,14 @@ export class MiniMindSimulator {
     const numExperts = this.config.numRoutedExperts;
 
     const currentTokens: TokenStepInfo[] = sourceTokens.map((tok, idx) => {
-      const e1 = (tok.id + idx) % numExperts;
-      const e2 = (e1 + 1 + (tok.id % (numExperts - 1))) % numExperts;
+      const layerRouting = isMoE
+        ? Array.from({ length: this.config.numLayers }, (_, l) => this.routeToken(tok.id, idx, l))
+        : [];
+      const l0 = layerRouting[0];
       const weights = Array.from({ length: numExperts }, (_, eIdx) => {
-        if (!isMoE) return 0;
-        if (eIdx === e1) return 0.58;
-        if (eIdx === e2) return 0.42;
-        return 0.0;
+        if (!l0) return 0;
+        const pos = l0.experts.indexOf(eIdx);
+        return pos >= 0 ? l0.weights[pos] : 0;
       });
       const isPromptMasked =
         this.stage !== 'pretrain' && (tok.role === 'user' || tok.role === 'system');
@@ -307,8 +453,9 @@ export class MiniMindSimulator {
         role: tok.role,
         lossMasked: isPromptMasked,
         ropeAngleRad,
-        activeExperts: isMoE ? [e1, e2] : [],
+        activeExperts: l0 ? [...l0.experts] : [],
         expertWeights: weights,
+        layerRouting,
       };
     });
 
@@ -322,13 +469,9 @@ export class MiniMindSimulator {
         ? Number((0.65 * depthFactor * (0.9 + 0.2 * Math.cos(this.step * 0.4 + layerIdx))).toFixed(3))
         : 0;
 
-      const imbalance = Math.exp(-this.step / 18) * 0.18;
-      const rawLoads = Array.from({ length: numExperts }, (__, eIdx) => {
-        const wave = Math.sin(this.step * 0.25 + layerIdx + eIdx * 1.5) * imbalance;
-        return Math.max(0.06, 1 / numExperts + wave);
-      });
-      const sumLoads = rawLoads.reduce((a, b) => a + b, 0);
-      const expertLoads = rawLoads.map((v) => Number((v / sumLoads).toFixed(3)));
+      const { loads: expertLoads, auxLoss } = isMoE
+        ? this.computeLayerLoad(layerIdx)
+        : { loads: [] as number[], auxLoss: 0 };
 
       return {
         layerIdx,
@@ -337,9 +480,25 @@ export class MiniMindSimulator {
         baseWeightGradNorm,
         loraAdapterGradNorm,
         expertLoads,
-        auxLoss: isMoE ? Number((0.024 * Math.exp(-this.step / 20) + 0.003).toFixed(4)) : 0,
+        auxLoss,
       };
     });
+
+    let moeBalance: MoeBalanceTelemetry | undefined;
+    if (isMoE) {
+      const effPerLayer = layers.map((l) =>
+        Math.exp(-l.expertLoads.reduce((acc, p) => (p > 0 ? acc + p * Math.log(p) : acc), 0))
+      );
+      moeBalance = {
+        auxLossEnabled: this.auxLossEnabled,
+        collapse: Number(this.collapse.toFixed(3)),
+        effectiveExperts: Number(
+          (effPerLayer.reduce((a, b) => a + b, 0) / Math.max(1, effPerLayer.length)).toFixed(2)
+        ),
+        auxAlpha: AUX_ALPHA,
+        routerFrozen: this.stage === 'lora',
+      };
+    }
 
     let rl: RlTelemetry | undefined;
     if (isRl) {
@@ -396,6 +555,7 @@ export class MiniMindSimulator {
       phaseProgress,
       layers,
       rl,
+      moeBalance,
       predictionDemo,
       comparisonQuestion: COMPARISON_QUESTION,
       stageAnswers: buildStageAnswers(loraPct),

@@ -841,3 +841,324 @@ body {
   padding: 6px 8px;
   border-radius: 7px;
 }
+
+/* ===== MoE X-Ray panel ===== */
+.xray-toggle-btn {
+  background: rgba(245, 158, 11, 0.14);
+  color: #fcd34d;
+  border: 1px solid rgba(245, 158, 11, 0.5);
+  padding: 5px 9px;
+  border-radius: 6px;
+  font-size: 11.5px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.16s ease;
+  margin-left: 4px;
+}
+.xray-toggle-btn:hover:not(:disabled) {
+  background: rgba(245, 158, 11, 0.28);
+  border-color: #fbbf24;
+}
+.xray-toggle-btn.active {
+  background: linear-gradient(135deg, #d97706, #b45309);
+  color: #fff;
+  border-color: #fbbf24;
+  box-shadow: 0 0 10px rgba(245, 158, 11, 0.4);
+}
+.xray-toggle-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.xray-panel {
+  pointer-events: auto;
+  width: 100%;
+  max-width: 640px;
+  min-height: 0;
+  flex: 0 1 auto;
+  overflow-y: auto;
+  margin-bottom: 8px;
+  background: rgba(15, 23, 42, 0.94);
+  backdrop-filter: blur(14px);
+  border: 1px solid rgba(245, 158, 11, 0.5);
+  border-radius: 12px;
+  padding: 10px 12px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
+}
+.xray-panel.hidden,
+.xray-section.hidden {
+  display: none;
+}
+.xray-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  margin-bottom: 8px;
+}
+.xray-header h3 {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 700;
+  color: #fef3c7;
+  white-space: nowrap;
+}
+.xray-layer-pill {
+  font-family: 'JetBrains Mono', Consolas, monospace;
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 99px;
+  background: rgba(245, 158, 11, 0.2);
+  border: 1px solid rgba(245, 158, 11, 0.6);
+  color: #fcd34d;
+}
+.xray-tabs .seg-btn {
+  font-size: 11px;
+  padding: 4px 8px;
+}
+.xray-row-label {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 10.5px;
+  color: var(--text-muted);
+  margin: 4px 0 4px;
+}
+.xray-focus-mode {
+  color: #fcd34d;
+  white-space: nowrap;
+}
+.xray-tokens,
+.xray-layers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.xray-tok {
+  background: rgba(30, 41, 59, 0.85);
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  color: #e2e8f0;
+  font-size: 11px;
+  padding: 3px 7px;
+  border-radius: 5px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.xray-tok:hover {
+  border-color: #fbbf24;
+}
+.xray-tok.focus {
+  background: rgba(245, 158, 11, 0.22);
+  border-color: #fbbf24;
+  color: #fff;
+}
+.xray-tok.pinned::after {
+  content: ' 📌';
+}
+.xray-svg {
+  width: 100%;
+  height: auto;
+  display: block;
+  margin: 4px 0 2px;
+}
+.xray-svg text {
+  font-family: 'Inter', 'Segoe UI', sans-serif;
+  pointer-events: none;
+}
+.xray-formula {
+  font-family: 'JetBrains Mono', Consolas, monospace;
+  font-size: 12px;
+  text-align: center;
+  padding: 5px 8px;
+  border-radius: 7px;
+  background: rgba(2, 6, 23, 0.7);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  color: #e2e8f0;
+  margin-bottom: 6px;
+}
+.xray-note {
+  font-size: 11.2px;
+  line-height: 1.5;
+  color: #cbd5e1;
+  margin-bottom: 6px;
+}
+.xray-note b {
+  color: #f8fafc;
+}
+.xray-layer-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  background: rgba(30, 41, 59, 0.85);
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  color: #cbd5e1;
+  font-size: 10px;
+  padding: 3px 6px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-family: inherit;
+  min-width: 62px;
+}
+.xray-layer-btn b {
+  font-size: 10.5px;
+  color: #f8fafc;
+}
+.xray-layer-btn.active {
+  border-color: #fbbf24;
+  background: rgba(245, 158, 11, 0.18);
+}
+.xray-layer-btn .pair {
+  font-family: 'JetBrains Mono', Consolas, monospace;
+  font-size: 10px;
+}
+.xray-sentence {
+  margin-top: 7px;
+  font-size: 11px;
+  color: #cbd5e1;
+}
+.xray-sentence .load-row {
+  display: grid;
+  grid-template-columns: 34px 1fr 52px;
+  align-items: center;
+  gap: 6px;
+  margin-top: 3px;
+}
+.xray-sentence .load-track {
+  height: 7px;
+  border-radius: 99px;
+  background: rgba(51, 65, 85, 0.7);
+  overflow: hidden;
+}
+.xray-sentence .load-fill {
+  height: 100%;
+  border-radius: 99px;
+  transition: width 0.3s ease;
+}
+.xray-balance-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  margin-bottom: 6px;
+}
+.aux-toggle {
+  border-radius: 99px;
+  padding: 5px 12px;
+  font-size: 11.5px;
+  font-weight: 800;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.16s ease;
+}
+.aux-toggle.on {
+  background: rgba(16, 185, 129, 0.2);
+  border: 1px solid #34d399;
+  color: #6ee7b7;
+}
+.aux-toggle.off {
+  background: rgba(244, 63, 94, 0.2);
+  border: 1px solid #fb7185;
+  color: #fda4af;
+}
+.aux-toggle:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.xray-balance-stats {
+  color: #cbd5e1;
+  font-size: 10.5px;
+}
+.xray-load-chart {
+  width: 100%;
+  height: auto;
+  display: block;
+  background: rgba(2, 6, 23, 0.6);
+  border-radius: 7px;
+  border: 1px solid rgba(148, 163, 184, 0.15);
+}
+.xray-load-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  font-size: 10.5px;
+  color: #cbd5e1;
+  margin: 4px 0 6px;
+}
+
+/* ===== Dense vs MoE comparison card ===== */
+.archcmp-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 10.8px;
+}
+.archcmp-table th,
+.archcmp-table td {
+  padding: 4px 4px;
+  text-align: right;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+}
+.archcmp-table th:first-child,
+.archcmp-table td:first-child {
+  text-align: left;
+  color: #cbd5e1;
+  font-weight: 500;
+}
+.archcmp-table th {
+  font-size: 10.2px;
+  color: #94a3b8;
+  font-weight: 700;
+  vertical-align: bottom;
+}
+.archcmp-table td {
+  font-family: 'JetBrains Mono', Consolas, monospace;
+  color: #e2e8f0;
+  white-space: nowrap;
+}
+.archcmp-table td:first-child {
+  font-family: inherit;
+  white-space: normal;
+}
+.archcmp-table .cur {
+  background: rgba(56, 189, 248, 0.12);
+  color: #fff;
+}
+.archcmp-table th.cur {
+  color: #7dd3fc;
+}
+.archcmp-table .hypo {
+  color: #94a3b8;
+  font-style: italic;
+}
+.archcmp-table td.good {
+  color: #6ee7b7;
+}
+.archcmp-table td.bad {
+  color: #fda4af;
+}
+.archcmp-takeaway {
+  margin-top: 7px;
+  font-size: 11.2px;
+  line-height: 1.5;
+  color: #e2e8f0;
+  background: rgba(245, 158, 11, 0.1);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  border-radius: 7px;
+  padding: 6px 8px;
+}
+.archcmp-warn {
+  margin-top: 6px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: #fecdd3;
+  background: rgba(244, 63, 94, 0.12);
+  border: 1px solid rgba(244, 63, 94, 0.4);
+  border-radius: 7px;
+  padding: 5px 8px;
+}
+.archcmp-foot {
+  margin-top: 5px;
+  font-size: 10.2px;
+  color: #94a3b8;
+  line-height: 1.4;
+}

@@ -12,7 +12,7 @@ Dự án trực quan hóa 3D theo thời gian thực cho kiến trúc và vòng 
   - Bản hiện tại của repo là **MiniMind-3** (Dense 64M; MoE 198M/64M kích hoạt, 4 experts Top-1, **không** có Shared Expert, GQA 8Q:4KV). Việc chuyển app sang MiniMind-3 chưa được quyết định.
 - **Trực quan hóa Kiến trúc 3D (Three.js):**
   - **Dense Transformer:** Token Embedding (`vocab_size = 6400`), **RoPE** (kim đồng hồ chỉ theo vị trí `m` của từ trong câu; góc `m·θ` chỉ phụ thuộc vị trí, không đổi theo step), **GQA 8Q : 2KV** (giảm 75% KV Cache — lợi ích chủ yếu khi suy luận và khi sinh mẫu Rollout của GRPO, không phải khi train), SwiGLU FFN.
-  - **MoE:** Router chọn **Top-2 Routed Experts** phát sáng + **1 Shared Expert** luôn hoạt động, kèm cột 3D hiển thị tải từng expert (Expert Load & Aux Loss).
+  - **MoE:** Router chọn **Top-2 Routed Experts** phát sáng + **1 Shared Expert** luôn hoạt động, kèm cột 3D hiển thị tải từng expert (Expert Load & Aux Loss). Router theo đúng `MoEGate` của MiniMind2: `softmax(gate(x))` → Top-2 → chuẩn hóa lại 2 trọng số (`norm_topk_prob=True`). **Mỗi tầng có Router riêng**, nên cùng một từ có thể đi vào cặp chuyên gia khác nhau ở từng tầng. Mỗi expert có một màu cố định, dùng chung cho 3D, sơ đồ soi tầng và biểu đồ tải.
 - **Nhịp 1 step huấn luyện (~4.8 giây ở tốc độ 1x, chỉnh được 0.25x – 3x):**
   1. **Forward — "Đọc cả câu":** Cả 10 từ của câu đi **song song** qua `L0 → L7` (không phải lần lượt từng từ).
   2. **Loss — "Chấm độ bất ngờ":** Tại đầu ra, từ được chấm Loss sáng xanh kèm vòng sóng; từ không chấm Loss (prompt) hiện màu xám.
@@ -31,6 +31,7 @@ Dự án trực quan hóa 3D theo thời gian thực cho kiến trúc và vòng 
   - **Story Mode (8 cảnh):** Đi lần lượt từ "Đoán chữ tiếp theo" → Từ điển & RoPE → GQA → MoE → Pretrain → SFT → LoRA → RL. Mỗi cảnh tự chuyển giai đoạn/kiến trúc và đưa camera tới đúng bộ phận đang giải thích.
   - **Thẻ HUD thu gọn được:** Ở chế độ Dễ hiểu, các thẻ chi tiết tự thu gọn để phần 3D rộng rãi.
   - **🧪 Train Thật (Web Worker):** Mạng nơ-ron siêu nhỏ train thật ngay trên trình duyệt (xem Bước 6).
+  - **🔍 Soi 1 tầng MoE** và **⚖️ Dense hay MoE — đánh đổi gì?** (xem Bước 8).
 - **Nguồn dữ liệu:** Simulator (mặc định), hoặc số liệu train thật từ PyTorch qua hook (`PYTORCH LIVE`). Ở chế độ live, chỉ loss, learning rate, step, grad norm từng tầng, số tham số và tổng VRAM là thật; hoạt ảnh, ô đoán chữ, cách chọn expert và câu trả lời mẫu vẫn là giả lập.
 
 ---
@@ -56,6 +57,10 @@ D:\Projects\ClaudeDemo\AI-Visualize\
 │       ├── vite.config.ts         # Tách `three` thành chunk riêng (three-vendor)
 │       └── src/
 │           ├── main.ts            # Kết nối WebSocket, đồng bộ nút điều khiển, HUD, Story Mode, nội dung Dễ hiểu / Chuyên sâu
+│           ├── expertColors.ts    # Màu cố định của 4 routed expert + shared (dùng chung 3D / SVG / biểu đồ)
+│           ├── ui/
+│           │   ├── moeXray.ts     # Panel "Soi 1 tầng MoE": sơ đồ SVG rẽ nhánh, công thức, routing 8 tầng, thí nghiệm Aux Loss
+│           │   └── archCompare.ts # Thẻ so sánh 3 cột: Dense nhỏ / MoE / Dense to (giả định)
 │           ├── scene/
 │           │   └── MiniMindScene.ts  # Scene Three.js: các khối 3D, hoạt ảnh 3 pha 60 FPS, camera bay theo giai đoạn, click để soi
 │           ├── workers/
@@ -86,4 +91,22 @@ D:\Projects\ClaudeDemo\AI-Visualize\
      - `POST /api/infer/generate` `{ prompt, stage, max_new_tokens, temperature }` → câu trả lời sinh ra (dùng chat template của MiniMind cho các giai đoạn từ SFT trở đi).
    - **Tích hợp client:** Thêm ô nhập câu hỏi. Nếu Inference Server đang chạy thì gọi API và hiển thị nhãn `MINIMIND THẬT`. Nếu không thì quay về dữ liệu viết sẵn (giống cơ chế fallback của simulator), để app vẫn chạy được khi không có GPU hoặc checkpoint.
    - **Lưu ý:** Phải ghi rõ trên giao diện checkpoint và kiến trúc nào đang được nạp (MiniMind2 hay MiniMind-3, Dense hay MoE), vì câu trả lời phụ thuộc vào checkpoint cụ thể.
-
+8. **Bước 8 (Hiểu "tại sao MoE" — đã làm):**
+   - **Thẻ ⚖️ Dense hay MoE — đánh đổi gì? (3 cột):** Dense nhỏ 25.8M • MoE 145M (45.2M kích hoạt) • **Dense to 145M (giả định)**.
+     - Cần cột thứ 3 vì Dense nhỏ (`d=512`) và MoE (`d=640`) khác kích thước. So trực tiếp 25.8M với 45.2M sẽ cho thấy MoE tốn sức **hơn** (1.75×), ngược với thông điệp. So với Dense cùng 145M thì MoE chỉ tốn ~1/3.2 công sức mỗi từ.
+     - Số liệu lấy từ `MiniMindSimulator.computeFootprint(arch, stage)`, cùng hàm mà `buildFrame()` dùng, nên luôn khớp thẻ VRAM (Dense 734 MB, MoE 2,860 MB ở Pretrain). VRAM của cột giả định chỉ ghi cận dưới `≥`.
+     - Khi tải bị sụp đổ, thẻ hiện cảnh báo "chỉ ~2/4 chuyên gia được dùng".
+   - **Panel 🔍 Soi 1 tầng MoE** (nút trên topbar, hoặc click vào Router/Expert trong 3D; Story cảnh 4 tự mở ở tầng L2):
+     - Tab ① **"1 từ đi qua tầng này"**: chọn từ (rê chuột để xem, click để ghim; không chọn thì tự chuyển mỗi 2.6 giây). Sơ đồ SVG `x → Router → 2 chuyên gia → Σ → y` cộng nhánh Shared đi thẳng không qua Router. Hạt sáng chạy theo 2 nhánh. Bản sao gửi **vào** 2 chuyên gia giống hệt nhau, chỉ **đầu ra** được nhân trọng số, nên đường ra dày theo trọng số và hạt nhỏ lại sau chuyên gia.
+     - Công thức sống `y = 0.62×E3(x) + 0.38×E0(x) + Shared(x)`. Dải 8 tầng cho thấy cùng từ đó chọn cặp nào ở mỗi tầng.
+     - Nhãn "💤 nghỉ" chỉ áp dụng cho **từng từ**. Bên dưới có bảng phân bổ của cả câu để thấy chuyên gia nào cũng có việc.
+     - **Không** gắn nhãn chủ đề kiểu "E0 = địa danh": router thật không chia việc theo chủ đề con người đặt tên được.
+     - Khi panel mở, scene 3D cắt bỏ các tầng phía trước, vẽ vòng sáng quanh tầng đang soi và tô routing của từ đang chọn trên cả 8 tầng.
+     - Tab ② **"Thí nghiệm Aux Loss"**: công tắc bật/tắt (`SET_AUX_LOSS`), nút ⏩ 3×, biểu đồ tải 4 chuyên gia qua 40 bước, số chuyên gia hiệu dụng `exp(H(load))`.
+   - **Mô phỏng sụp đổ tải (trong `simulator.ts`):**
+     - Khi tắt Aux Loss, độ lệch tăng dần theo kiểu "giàu càng giàu" (tăng theo hàm logistic, khoảng 15–20 bước). Khi bật lại thì hồi phục dần.
+     - Với Top-2, mỗi expert nhận tối đa 50% lượt, nên trạng thái sụp đổ là **50/50/0/0**.
+     - Aux loss tính theo `seq_aux` của MiniMind2: `aux = α·Σ ceᵢ·Pᵢ`, `α = 0.1`. Giá trị ≈ 0.10 khi chia đều, ≈ 0.20 khi sụp đổ.
+     - Ở **LoRA** Router bị đóng băng nên tải đứng yên.
+     - Tải mỗi tầng được ước tính trên một batch ảo 64 token.
+   - **Còn mở:** Ở màn hình ~1440×900, panel che phần lớn vùng 3D ở giữa khi đang ở tab ①. Nếu chuyển sang MiniMind-3 (Top-1, không có Shared Expert), cần sửa sơ đồ, công thức và trần tải (Top-1 cho phép 1 expert ôm 100%).

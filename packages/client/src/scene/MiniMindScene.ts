@@ -1,6 +1,13 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { MiniMindSimulator, TelemetryFrame, TrainingStage } from '@minimind-viz/shared';
+import { EXPERT_COLORS_HEX } from '../expertColors';
+
+/** Which MoE layer and token the X-Ray panel is looking at (null = panel closed). */
+export interface MoeFocus {
+  layerIdx: number;
+  tokenIdx: number;
+}
 
 export interface InspectableMetadata {
   title: string;
@@ -35,6 +42,7 @@ interface FloatingLabel {
   worldPos: THREE.Vector3;
   isLockBadge?: boolean;
   isRopeLabel?: boolean;
+  layerIdx?: number; // hidden together with its layer in X-Ray cutaway mode
 }
 
 export class MiniMindScene {
@@ -64,6 +72,8 @@ export class MiniMindScene {
   private latestFrame: TelemetryFrame | null = null;
   private lastStage: TrainingStage | null = null;
   private suppressAutoFocusForStage: TrainingStage | null = null;
+  private moeFocus: MoeFocus | null = null;
+  private xrayHalo!: THREE.Mesh;
 
   // Continuous 60fps client-side cycle clock synced to server telemetry
   private localCycleSeconds = 0;
@@ -175,6 +185,42 @@ export class MiniMindScene {
     this.flyCameraToCoords(pos, lookAt);
   }
 
+  /**
+   * X-Ray mode for one MoE layer: cut away the layers in front of it (they would block the view),
+   * ring it with a halo, fly the camera in, and light the routing of the focused token.
+   * Pass null to restore the full model.
+   */
+  public setMoeFocus(focus: MoeFocus | null): void {
+    const prevLayer = this.moeFocus?.layerIdx ?? null;
+    this.moeFocus = focus;
+    this.layerNodes.forEach((node, idx) => {
+      node.group.visible = !focus || idx <= focus.layerIdx;
+    });
+    for (const lbl of this.labels) {
+      if (lbl.layerIdx !== undefined) {
+        lbl.el.style.visibility = !focus || lbl.layerIdx <= focus.layerIdx ? 'visible' : 'hidden';
+      }
+    }
+    if (focus) {
+      const node = this.layerNodes[focus.layerIdx];
+      this.xrayHalo.visible = true;
+      this.xrayHalo.position.set(0, 1.4, node.zPos + 0.75);
+      if (prevLayer !== focus.layerIdx) {
+        // Look slightly below the layer so it sits in the upper half of the screen, above the X-Ray panel.
+        this.flyCameraTo(
+          new THREE.Vector3(6.5, 9.5, node.zPos + 19),
+          new THREE.Vector3(0, -3.2, node.zPos)
+        );
+      }
+    } else {
+      this.xrayHalo.visible = false;
+      if (prevLayer !== null && this.latestFrame) {
+        this.focusStageCamera(this.latestFrame.stage);
+      }
+    }
+    if (this.latestFrame) this.applyMoeLighting(this.latestFrame);
+  }
+
   private flyCameraTo(pos: THREE.Vector3, lookAt: THREE.Vector3): void {
     this.camStartPos.copy(this.camera.position);
     this.camStartLook.copy(this.controls.target);
@@ -203,7 +249,7 @@ export class MiniMindScene {
   private createLabel(
     text: string,
     worldPos: THREE.Vector3,
-    opts?: { isLockBadge?: boolean; isRopeLabel?: boolean }
+    opts?: { isLockBadge?: boolean; isRopeLabel?: boolean; layerIdx?: number }
   ): void {
     const el = document.createElement('div');
     el.className = opts?.isLockBadge ? 'scene-label lock-badge' : 'scene-label';
@@ -217,6 +263,7 @@ export class MiniMindScene {
       worldPos,
       isLockBadge: opts?.isLockBadge,
       isRopeLabel: opts?.isRopeLabel,
+      layerIdx: opts?.layerIdx,
     });
   }
 
@@ -384,6 +431,16 @@ export class MiniMindScene {
       });
       const sharedExpertMesh = new THREE.Mesh(sharedGeo, sharedMat);
       sharedExpertMesh.position.set(0, 0.75, 0);
+      sharedExpertMesh.userData.inspect = {
+        title: `Tầng ${i} — Chuyên gia chung (Shared Expert)`,
+        layerIdx: i,
+        kind: 'moe_expert',
+        shape: '[640 → 1408 → 640], luôn bật, trọng số ×1',
+        simpleDesc:
+          'Chuyên gia chung: KHÔNG đi qua Router, làm việc với mọi từ. Giữ phần kiến thức nền mà từ nào cũng cần, để 4 chuyên gia kia không phải học lặp lại.',
+        technicalDesc:
+          'Shared Expert (n_shared_experts=1) trong MiniMind2-MoE: y = Σ w_i·E_i(x) + Shared(x). Luôn kích hoạt, không chịu gating hay aux loss.',
+      } satisfies InspectableMetadata;
       moeGroup.add(sharedExpertMesh);
 
       const routedExpertMeshes: THREE.Mesh[] = [];
@@ -412,8 +469,8 @@ export class MiniMindScene {
           layerIdx: i,
           kind: 'moe_expert',
           shape: '[640 → 1408 → 640]',
-          simpleDesc: `Bác sĩ chuyên khoa E${e}: Chỉ bật đèn sáng làm việc và được cập nhật kinh nghiệm khi nằm trong Top-2 của từ đang xử lý.`,
-          technicalDesc: `Routed Expert E${e} trong MiniMind2-MoE. Kích hoạt thưa Top-2 và cân bằng tải qua hệ số phạt Auxiliary Loss.`,
+          simpleDesc: `Chuyên gia E${e}: chỉ làm việc (và chỉ được cập nhật) khi Router chọn nó trong Top-2 cho từ đang xét. Router tự học cách chia việc — cách chia thường không trùng với chủ đề mà con người đặt tên được (không phải "E0 = địa danh").`,
+          technicalDesc: `Routed Expert E${e} (SwiGLU FFN) trong MiniMind2-MoE. Chỉ chạy forward/nhận gradient cho token có E${e} trong Top-2; cân bằng tải nhờ aux loss (α=0.1).`,
         } satisfies InspectableMetadata;
         moeGroup.add(expMesh);
         routedExpertMeshes.push(expMesh);
@@ -524,8 +581,8 @@ export class MiniMindScene {
       group.add(klBeam);
 
       this.scene.add(group);
-      this.createLabel(`L${i}`, new THREE.Vector3(-4.5, -2.5, z));
-      this.createLabel('🔒 Đóng băng', new THREE.Vector3(0, 3.6, z), { isLockBadge: true });
+      this.createLabel(`L${i}`, new THREE.Vector3(-4.5, -2.5, z), { layerIdx: i });
+      this.createLabel('🔒 Đóng băng', new THREE.Vector3(0, 3.6, z), { isLockBadge: true, layerIdx: i });
 
       this.layerNodes.push({
         group,
@@ -659,6 +716,65 @@ export class MiniMindScene {
     this.baseActivationGradWaveBar = new THREE.Mesh(baseGradGeo, baseGradMat);
     this.baseActivationGradWaveBar.visible = false;
     this.scene.add(this.baseActivationGradWaveBar);
+
+    // X-Ray halo around the layer being inspected
+    this.xrayHalo = new THREE.Mesh(
+      new THREE.RingGeometry(4.55, 4.8, 64),
+      new THREE.MeshBasicMaterial({ color: 0xfbbf24, transparent: true, opacity: 0.55, side: THREE.DoubleSide })
+    );
+    this.xrayHalo.visible = false;
+    this.scene.add(this.xrayHalo);
+  }
+
+  /** Routing decision shown in 3D for one layer: the X-Ray token if open, else the token being scanned. */
+  private routingForLayer(frame: TelemetryFrame, layerIdx: number): { experts: number[]; weights: number[] } {
+    const tokIdx = this.moeFocus?.tokenIdx ?? frame.activeTokenIdx;
+    const tok = frame.currentTokens[tokIdx] || frame.currentTokens[0];
+    const r = tok?.layerRouting?.[layerIdx];
+    return r ? { experts: r.experts, weights: r.weights } : { experts: tok?.activeExperts ?? [], weights: [] };
+  }
+
+  /** Expert / beam / load-bar colours. Each layer lights the experts ITS router picked. */
+  private applyMoeLighting(frame: TelemetryFrame): void {
+    const isLora = frame.stage === 'lora';
+    this.layerNodes.forEach((node, layerIdx) => {
+      const { experts, weights } = this.routingForLayer(frame, layerIdx);
+      const layerTelemetry = frame.layers[layerIdx];
+      const isFocusLayer = this.moeFocus?.layerIdx === layerIdx;
+      node.routedExpertMeshes.forEach((expMesh, eIdx) => {
+        const slot = experts.indexOf(eIdx);
+        const isTopK = slot >= 0;
+        const w = isTopK ? (weights[slot] ?? 0.5) : 0;
+        const expMat = expMesh.material as THREE.MeshPhysicalMaterial;
+        if (isLora) {
+          expMat.color.setHex(0x7dd3fc);
+          expMat.emissive.setHex(0x0369a1);
+          expMat.emissiveIntensity = isTopK ? 0.35 : 0.12;
+          expMat.opacity = 0.26;
+        } else if (isTopK) {
+          expMat.color.setHex(EXPERT_COLORS_HEX[eIdx]);
+          expMat.emissive.setHex(EXPERT_COLORS_HEX[eIdx]);
+          expMat.emissiveIntensity = 0.55 + 0.5 * w + (isFocusLayer ? 0.25 : 0);
+          expMat.opacity = 0.98;
+        } else {
+          expMat.color.setHex(0x1e293b);
+          expMat.emissive.setHex(0x0f172a);
+          expMat.emissiveIntensity = 0.15;
+          expMat.opacity = 0.52;
+        }
+
+        const beamMat = node.routerBeams[eIdx].material as THREE.LineBasicMaterial;
+        beamMat.opacity = isTopK ? 0.45 + 0.55 * w : 0.1;
+        beamMat.color.setHex(isLora ? 0x7dd3fc : isTopK ? EXPERT_COLORS_HEX[eIdx] : 0x38bdf8);
+
+        const loadVal = layerTelemetry?.expertLoads[eIdx] ?? 0.25;
+        node.expertLoadBars[eIdx].scale.y = Math.max(0.12, loadVal * 3.6);
+        const barMat = node.expertLoadBars[eIdx].material as THREE.MeshStandardMaterial;
+        barMat.color.setHex(EXPERT_COLORS_HEX[eIdx]);
+        barMat.emissive.setHex(EXPERT_COLORS_HEX[eIdx]);
+        barMat.emissiveIntensity = 0.35;
+      });
+    });
   }
 
   public updateFromTelemetry(frame: TelemetryFrame): void {
@@ -687,8 +803,8 @@ export class MiniMindScene {
 
     if (this.lastStage !== frame.stage) {
       this.lastStage = frame.stage;
-      if (this.suppressAutoFocusForStage === frame.stage) {
-        // Story Mode already flew the camera to a hand-picked view for this stage.
+      if (this.suppressAutoFocusForStage === frame.stage || this.moeFocus) {
+        // Story Mode (or the MoE X-Ray) already chose the camera for this view.
         this.suppressAutoFocusForStage = null;
       } else {
         this.suppressAutoFocusForStage = null;
@@ -720,9 +836,7 @@ export class MiniMindScene {
       });
     }
 
-    const activeToken = frame.currentTokens[frame.activeTokenIdx] || frame.currentTokens[0];
-
-    this.layerNodes.forEach((node, layerIdx) => {
+    this.layerNodes.forEach((node) => {
       node.denseFfnMesh.visible = !isMoE;
       node.moeGroup.visible = isMoE;
       node.loraGroup.visible = isLora;
@@ -769,38 +883,8 @@ export class MiniMindScene {
         sharedMat.opacity = 0.95;
       }
 
-      const layerTelemetry = frame.layers[layerIdx];
-      const activeExperts = activeToken?.activeExperts || [];
-
-      node.routedExpertMeshes.forEach((expMesh, eIdx) => {
-        const isTopK = activeExperts.includes(eIdx);
-        const expMat = expMesh.material as THREE.MeshPhysicalMaterial;
-        if (isLora) {
-          expMat.color.setHex(0x7dd3fc);
-          expMat.emissive.setHex(0x0369a1);
-          expMat.emissiveIntensity = isTopK ? 0.35 : 0.12;
-          expMat.opacity = 0.26;
-        } else if (isTopK) {
-          expMat.color.setHex(0xf59e0b);
-          expMat.emissive.setHex(0xd97706);
-          expMat.emissiveIntensity = 0.92;
-          expMat.opacity = 0.98;
-        } else {
-          expMat.color.setHex(0x1e293b);
-          expMat.emissive.setHex(0x0f172a);
-          expMat.emissiveIntensity = 0.15;
-          expMat.opacity = 0.52;
-        }
-
-        const beamMat = node.routerBeams[eIdx].material as THREE.LineBasicMaterial;
-        beamMat.opacity = isTopK ? 0.92 : 0.12;
-        beamMat.color.setHex(isLora ? 0x7dd3fc : isTopK ? 0xfbbf24 : 0x38bdf8);
-
-        const loadVal = layerTelemetry?.expertLoads[eIdx] ?? 0.25;
-        const loadBar = node.expertLoadBars[eIdx];
-        loadBar.scale.y = Math.max(0.25, loadVal * 3.6);
-      });
     });
+    this.applyMoeLighting(frame);
   }
 
   private onPointerDown(event: PointerEvent): void {
@@ -812,6 +896,12 @@ export class MiniMindScene {
     const hits = this.raycaster.intersectObjects(this.scene.children, true);
 
     for (const hit of hits) {
+      // Raycaster does not skip hidden objects (cut-away layers, the inactive Dense/MoE block).
+      let shown = true;
+      hit.object.traverseAncestors((a) => {
+        if (!a.visible) shown = false;
+      });
+      if (!hit.object.visible || !shown) continue;
       let obj: THREE.Object3D | null = hit.object;
       while (obj) {
         if (obj.userData?.inspect && this.onSelectCallback) {
@@ -956,11 +1046,9 @@ export class MiniMindScene {
           this.baseActivationGradWaveBar.visible = false;
         }
 
-        const activeExperts =
-          (frame.currentTokens[frame.activeTokenIdx] || frame.currentTokens[0])?.activeExperts || [0, 1];
-
         // Pulse every trainable block in each layer as the backward wave crosses its Z position!
-        this.layerNodes.forEach((node) => {
+        this.layerNodes.forEach((node, layerIdx) => {
+          const activeExperts = this.routingForLayer(frame, layerIdx).experts;
           const dist = Math.abs(node.zPos - gradZ);
           const pulse = dist < 3.4 ? 1 + (1 - dist / 3.4) * 0.26 : 1.0;
 
