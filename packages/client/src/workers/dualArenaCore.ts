@@ -1,14 +1,15 @@
 /**
- * Dual Iso-FLOPs Live Training Arena Core (Pure TypeScript).
+ * Dual Live Training Arena Core (Pure TypeScript).
  *
- * Trains a real Dense Language Model and a real 4-Expert Top-2 + 1 Shared MoE Language Model
- * simultaneously on the exact same mini-batches of 64 Vietnamese sentences (~800 tokens/epoch):
- * - Equal active compute per token (Iso-FLOPs): 18 active FFN hidden neurons on BOTH sides!
- *   • Dense: 1 monolithic FFN block (18 active / 18 total FFN neurons, 906 FFN params).
- *   • MoE:   Router + 4 Routed Experts × 7 (Top-2 active = 14) + 1 Shared × 4 (always active)
- *            = 18 active / 32 total FFN neurons (1,788 FFN params).
- * - Saves a full `DualEpochSnapshot` at Epoch 0 and after every Epoch so the user can pause,
- *   step 1 Epoch at a time, or scrub back and forth through training history.
+ * Trains 3 real Language Models simultaneously on the exact same shuffled epoch batches
+ * of 64 Vietnamese sentences (880 token samples/epoch):
+ *   1. Dense nhỏ (H=18): 18 active / 18 total FFN neurons (tanh).
+ *   2. MoE (4×7 Top-2 + 4 Shared): 18 active / 32 total FFN neurons (tanh, norm_topk_prob, SHARED_SCALE=1).
+ *   3. Dense to (H=32): 32 active / 32 total FFN neurons (tanh, matching MoE's total FFN width).
+ *
+ * All 3 models share identical initial Embedding (E) and LM Head (Wout, bout) weights from the same seed,
+ * use causal context pooling `x = 0.4·E[cur] + 0.6·mean(E[prev])` (no attention, no residual skip),
+ * and save full `DualEpochSnapshot` checkpoints after every complete epoch pass.
  */
 
 import {
@@ -78,6 +79,7 @@ export interface GenerationSample {
 export interface DualEpochSnapshot {
   epoch: number;
   step: number;
+  auxLossEnabled: boolean;
   stageLabel: string;
   dense: {
     ceLoss: number;
@@ -88,9 +90,18 @@ export interface DualEpochSnapshot {
     probeByDomain: Record<DomainId, DenseProbeInspection>;
     generations: GenerationSample[];
   };
+  denseBig: {
+    ceLoss: number;
+    totalParams: number;
+    ffnParams: number;
+    activeFfnNeurons: number;
+    totalFfnNeurons: number;
+    generations: GenerationSample[];
+  };
   moe: {
     ceLoss: number;
     auxLoss: number;
+    rawImbalance: number;
     effectiveExperts: number;
     specializationPct: number;
     totalParams: number;
@@ -112,10 +123,13 @@ export interface DualArenaUpdateMessage {
   viewedEpoch: number;
   maxEpochs: number;
   vocabSize: number;
+  totalSamples: number;
   current: DualEpochSnapshot;
   history: Array<{
     epoch: number;
+    auxLossEnabled: boolean;
     denseCeLoss: number;
+    denseBigCeLoss: number;
     moeCeLoss: number;
     moeSpecPct: number;
     moeEffExperts: number;
@@ -142,6 +156,12 @@ function mulberry32(seed: number): () => number {
   };
 }
 
+interface SharedInitWeights {
+  E: Float32Array;
+  Wout: Float32Array;
+  bout: Float32Array;
+}
+
 function createAdamParam(size: number, scale: number, randn: () => number): AdamParam {
   const data = new Float32Array(size);
   for (let i = 0; i < size; i++) data[i] = randn() * scale;
@@ -151,6 +171,23 @@ function createAdamParam(size: number, scale: number, randn: () => number): Adam
     m: new Float32Array(size),
     v: new Float32Array(size),
   };
+}
+
+function cloneAdamParam(src: Float32Array): AdamParam {
+  return {
+    data: new Float32Array(src),
+    grad: new Float32Array(src.length),
+    m: new Float32Array(src.length),
+    v: new Float32Array(src.length),
+  };
+}
+
+function computeEffectiveExpertsEntropy(loads: number[]): number {
+  let entropy = 0;
+  for (const p of loads) {
+    if (p > 1e-9) entropy -= p * Math.log(p);
+  }
+  return Number(Math.exp(entropy).toFixed(2));
 }
 
 function adamStep(p: AdamParam, t: number, lr: number): void {
@@ -300,7 +337,7 @@ function backpropContextVecIntoEmb(
 }
 
 class DenseCore {
-  public readonly H = 18; // Iso-FLOPs: 18 active FFN neurons / 18 total
+  public readonly H: number;
   public readonly ffnParams: number;
   public readonly totalParams: number;
 
@@ -313,14 +350,21 @@ class DenseCore {
   private bout: AdamParam;
   private step = 0;
 
-  constructor(private readonly V: number, private readonly D: number, randn: () => number) {
-    this.E = createAdamParam(V * D, 0.24, randn);
+  constructor(
+    private readonly V: number,
+    private readonly D: number,
+    H: number,
+    shared: SharedInitWeights,
+    randn: () => number
+  ) {
+    this.H = H;
+    this.E = cloneAdamParam(shared.E);
     this.W1 = createAdamParam(this.H * D, Math.sqrt(1.2 / D), randn);
     this.b1 = createAdamParam(this.H, 0.02, randn);
     this.W2 = createAdamParam(D * this.H, Math.sqrt(1.2 / this.H), randn);
     this.b2 = createAdamParam(D, 0.01, randn);
-    this.Wout = createAdamParam(V * D, Math.sqrt(1.0 / D), randn);
-    this.bout = createAdamParam(V, 0.01, randn);
+    this.Wout = cloneAdamParam(shared.Wout);
+    this.bout = cloneAdamParam(shared.bout);
 
     this.ffnParams =
       this.W1.data.length + this.b1.data.length + this.W2.data.length + this.b2.data.length;
@@ -448,7 +492,11 @@ class DenseCore {
       if (bestId === 1) break;
       seq.push(bestId);
     }
-    return seq.map((id) => idToWord[id]).join(' ');
+    const cont = seq
+      .slice(promptIds.length)
+      .map((id) => idToWord[id])
+      .join(' ');
+    return cont || '(kết thúc câu)';
   }
 }
 
@@ -457,12 +505,12 @@ class MoECore {
   public readonly K = 2;
   public readonly H_EXP = 7;
   public readonly H_SHARED = 4;
-  public readonly activeFfnNeurons = 2 * 7 + 4; // 18 active FFN neurons (exact Iso-FLOPs!)
+  public readonly activeFfnNeurons = 2 * 7 + 4; // 18 active FFN neurons
   public readonly totalFfnNeurons = 4 * 7 + 4; // 32 total FFN neurons
   public readonly ffnParams: number;
   public readonly totalParams: number;
 
-  private readonly SHARED_SCALE = 0.2;
+  private readonly SHARED_SCALE = 1.0;
   private readonly ROUTER_LR_MULT = 2.6;
   private readonly ROUTER_TEMP = 0.48;
   private readonly AUX_ALPHA = 0.2;
@@ -481,10 +529,14 @@ class MoECore {
   private Wout: AdamParam;
   private bout: AdamParam;
   private step = 0;
-  private lastAuxLoss = 0.2;
 
-  constructor(private readonly V: number, private readonly D: number, randn: () => number) {
-    this.E = createAdamParam(V * D, 0.24, randn);
+  constructor(
+    private readonly V: number,
+    private readonly D: number,
+    shared: SharedInitWeights,
+    randn: () => number
+  ) {
+    this.E = cloneAdamParam(shared.E);
     this.Wgate = createAdamParam(this.N * D, 0.18, randn);
     this.bgate = createAdamParam(this.N, 0.01, randn);
 
@@ -495,13 +547,13 @@ class MoECore {
       this.b2e.push(createAdamParam(D, 0.01, randn));
     }
 
-    this.W1s = createAdamParam(this.H_SHARED * D, Math.sqrt(0.8 / D), randn);
+    this.W1s = createAdamParam(this.H_SHARED * D, Math.sqrt(1.2 / D), randn);
     this.b1s = createAdamParam(this.H_SHARED, 0.01, randn);
-    this.W2s = createAdamParam(D * this.H_SHARED, Math.sqrt(0.8 / this.H_SHARED), randn);
+    this.W2s = createAdamParam(D * this.H_SHARED, Math.sqrt(1.2 / this.H_SHARED), randn);
     this.b2s = createAdamParam(D, 0.01, randn);
 
-    this.Wout = createAdamParam(V * D, Math.sqrt(1.0 / D), randn);
-    this.bout = createAdamParam(V, 0.01, randn);
+    this.Wout = cloneAdamParam(shared.Wout);
+    this.bout = cloneAdamParam(shared.bout);
 
     this.ffnParams =
       this.Wgate.data.length +
@@ -540,6 +592,7 @@ class MoECore {
     gateProbs: number[];
     topExperts: [number, number];
     weights: [number, number];
+    topSum: number;
   } {
     const invT = 1 / this.ROUTER_TEMP;
     const logits = [0, 0, 0, 0];
@@ -580,6 +633,7 @@ class MoECore {
       gateProbs: probs,
       topExperts: [e0, e1],
       weights: [probs[e0] / topSum, probs[e1] / topSum],
+      topSum,
     };
   }
 
@@ -591,15 +645,14 @@ class MoECore {
   } {
     const { gateProbs, topExperts, weights } = this.route(x);
     const [eA, eB] = topExperts;
-    const gA = gateProbs[eA];
-    const gB = gateProbs[eB];
+    const [wA, wB] = weights;
     const expA = forwardMlp(x, this.D, this.W1e[eA].data, this.b1e[eA].data, this.W2e[eA].data, this.b2e[eA].data, this.H_EXP);
     const expB = forwardMlp(x, this.D, this.W1e[eB].data, this.b1e[eB].data, this.W2e[eB].data, this.b2e[eB].data, this.H_EXP);
     const expS = forwardMlp(x, this.D, this.W1s.data, this.b1s.data, this.W2s.data, this.b2s.data, this.H_SHARED);
 
     const h = new Float32Array(this.D);
     for (let i = 0; i < this.D; i++) {
-      h[i] = gA * expA.out[i] + gB * expB.out[i] + this.SHARED_SCALE * expS.out[i];
+      h[i] = wA * expA.out[i] + wB * expB.out[i] + this.SHARED_SCALE * expS.out[i];
     }
     return { h, gateProbs, topExperts, weights };
   }
@@ -609,17 +662,21 @@ class MoECore {
     const invB = 1 / batch.length;
     const counts = [0, 0, 0, 0];
     const sumProbs = [0, 0, 0, 0];
-    const caches: Array<{ x: Float32Array; gateProbs: number[]; dP_ce: [number, number, number, number] }> = [];
+    const caches: Array<{
+      s: Sample;
+      x: Float32Array;
+      gateProbs: number[];
+      dP_ce: [number, number, number, number];
+    }> = [];
 
     const dh = new Float32Array(this.D);
     const dx = new Float32Array(this.D);
 
     for (const s of batch) {
       const x = buildContextVecFromEmb(this.E.data, this.D, s.curId, s.contextIds);
-      const { gateProbs, topExperts } = this.route(x);
+      const { gateProbs, topExperts, weights, topSum } = this.route(x);
       const [eA, eB] = topExperts;
-      const gA = gateProbs[eA];
-      const gB = gateProbs[eB];
+      const [wA, wB] = weights;
 
       counts[eA] += 1;
       counts[eB] += 1;
@@ -631,7 +688,7 @@ class MoECore {
 
       const h = new Float32Array(this.D);
       for (let i = 0; i < this.D; i++) {
-        h[i] = gA * expA.out[i] + gB * expB.out[i] + this.SHARED_SCALE * expS.out[i];
+        h[i] = wA * expA.out[i] + wB * expB.out[i] + this.SHARED_SCALE * expS.out[i];
       }
 
       const probs = computeSoftmaxProbs(h, this.D, this.V, this.Wout.data, this.bout.data);
@@ -653,36 +710,41 @@ class MoECore {
         dotA += dh[i] * expA.out[i];
         dotB += dh[i] * expB.out[i];
       }
+      // Quotient rule gradient through wA = pA / (pA + pB), wB = pB / (pA + pB)
       const dP_ce: [number, number, number, number] = [0, 0, 0, 0];
-      dP_ce[eA] = dotA;
-      dP_ce[eB] = dotB;
-      caches.push({ x, gateProbs, dP_ce });
+      dP_ce[eA] = (wB * (dotA - dotB)) / topSum;
+      dP_ce[eB] = (wA * (dotB - dotA)) / topSum;
+      caches.push({ s, x, gateProbs, dP_ce });
 
       dx.fill(0);
-      backpropMlp(x, this.D, expA.hidden, dh, gA, this.W1e[eA], this.b1e[eA], this.W2e[eA], this.b2e[eA], this.H_EXP, dx);
-      backpropMlp(x, this.D, expB.hidden, dh, gB, this.W1e[eB], this.b1e[eB], this.W2e[eB], this.b2e[eB], this.H_EXP, dx);
+      backpropMlp(x, this.D, expA.hidden, dh, wA, this.W1e[eA], this.b1e[eA], this.W2e[eA], this.b2e[eA], this.H_EXP, dx);
+      backpropMlp(x, this.D, expB.hidden, dh, wB, this.W1e[eB], this.b1e[eB], this.W2e[eB], this.b2e[eB], this.H_EXP, dx);
       backpropMlp(x, this.D, expS.hidden, dh, this.SHARED_SCALE, this.W1s, this.b1s, this.W2s, this.b2s, this.H_SHARED, dx);
       backpropContextVecIntoEmb(this.E.grad, this.D, s.curId, s.contextIds, dx);
     }
 
     const denom = batch.length * (this.K / this.N);
     const ce = counts.map((c) => c / denom);
-    const meanP = sumProbs.map((s) => s * invB);
     const alpha = auxLossEnabled ? this.AUX_ALPHA : 0;
-    this.lastAuxLoss = Number((alpha * ce.reduce((acc, c, e) => acc + c * meanP[e], 0)).toFixed(4));
 
     const invT = 1 / this.ROUTER_TEMP;
+    const dxRouter = new Float32Array(this.D);
     for (const item of caches) {
       const dP = [0, 0, 0, 0];
       for (let e = 0; e < this.N; e++) dP[e] = item.dP_ce[e] + alpha * ce[e] * invB;
       let dot = 0;
       for (let e = 0; e < this.N; e++) dot += item.gateProbs[e] * dP[e];
+      dxRouter.fill(0);
       for (let e = 0; e < this.N; e++) {
         const ds = item.gateProbs[e] * (dP[e] - dot) * invT;
         this.bgate.grad[e] += ds;
         const off = e * this.D;
-        for (let j = 0; j < this.D; j++) this.Wgate.grad[off + j] += ds * item.x[j];
+        for (let j = 0; j < this.D; j++) {
+          this.Wgate.grad[off + j] += ds * item.x[j];
+          dxRouter[j] += ds * this.Wgate.data[off + j];
+        }
       }
+      backpropContextVecIntoEmb(this.E.grad, this.D, item.s.curId, item.s.contextIds, dxRouter);
     }
 
     this.step += 1;
@@ -693,14 +755,17 @@ class MoECore {
     }
   }
 
-  public evaluate(samples: Sample[]): {
+  public evaluate(samples: Sample[], auxLossEnabled: boolean): {
     ceLoss: number;
     auxLoss: number;
+    rawImbalance: number;
     effectiveExperts: number;
     specializationPct: number;
     experts: ExpertEmergenceSnapshot[];
   } {
     let totalCe = 0;
+    const counts = [0, 0, 0, 0];
+    const sumProbs = [0, 0, 0, 0];
     const expertSlotTotals = [0, 0, 0, 0];
     const domainCounts: Array<Record<DomainId, number>> = Array.from({ length: this.N }, () => ({
       geo: 0,
@@ -714,9 +779,13 @@ class MoECore {
 
     for (const s of samples) {
       const x = buildContextVecFromEmb(this.E.data, this.D, s.curId, s.contextIds);
-      const { h, topExperts, weights } = this.forwardHidden(x);
+      const { h, gateProbs, topExperts, weights } = this.forwardHidden(x);
       const probs = computeSoftmaxProbs(h, this.D, this.V, this.Wout.data, this.bout.data);
       totalCe += -Math.log(Math.max(1e-7, probs[s.target]));
+
+      counts[topExperts[0]] += 1;
+      counts[topExperts[1]] += 1;
+      for (let e = 0; e < this.N; e++) sumProbs[e] += gateProbs[e];
 
       for (let slot = 0; slot < 2; slot++) {
         const e = topExperts[slot];
@@ -734,10 +803,15 @@ class MoECore {
       }
     }
 
+    const nSamples = Math.max(1, samples.length);
+    const ce = counts.map((c) => c / (nSamples * (this.K / this.N)));
+    const meanP = sumProbs.map((s) => s / nSamples);
+    const rawImbalance = ce.reduce((acc, c, e) => acc + c * meanP[e], 0);
+    const auxLoss = auxLossEnabled ? Number((this.AUX_ALPHA * rawImbalance).toFixed(4)) : 0;
+
     const grandTotal = expertSlotTotals.reduce((a, b) => a + b, 0) || 1;
     const loads = expertSlotTotals.map((t) => t / grandTotal);
-    const sumSq = loads.reduce((acc, l) => acc + l * l, 0);
-    const effectiveExperts = Number((sumSq > 0 ? 1 / sumSq : 0).toFixed(2));
+    const effectiveExperts = computeEffectiveExpertsEntropy(loads);
 
     const experts: ExpertEmergenceSnapshot[] = [];
     let weightedPurity = 0;
@@ -781,8 +855,9 @@ class MoECore {
     );
 
     return {
-      ceLoss: Number((totalCe / Math.max(1, samples.length)).toFixed(4)),
-      auxLoss: this.lastAuxLoss,
+      ceLoss: Number((totalCe / nSamples).toFixed(4)),
+      auxLoss,
+      rawImbalance: Number(rawImbalance.toFixed(3)),
       effectiveExperts,
       specializationPct,
       experts,
@@ -831,13 +906,16 @@ class MoECore {
       if (bestId === 1) break;
       seq.push(bestId);
     }
-    return seq.map((id) => idToWord[id]).join(' ');
+    const cont = seq
+      .slice(promptIds.length)
+      .map((id) => idToWord[id])
+      .join(' ');
+    return cont || '(kết thúc câu)';
   }
 }
 
 export class DualArenaEngine {
   public readonly MAX_EPOCHS = 25;
-  public readonly BATCHES_PER_EPOCH = 12;
   public readonly BATCH_SIZE = 64;
   private readonly D = 24;
   private readonly BASE_LR = 0.032;
@@ -846,9 +924,9 @@ export class DualArenaEngine {
   private idToWord: string[] = [];
   private V = 0;
   private allSamples: Sample[] = [];
-  private cursor = 0;
 
   private dense!: DenseCore;
+  private denseBig!: DenseCore;
   private moe!: MoECore;
 
   public seed = 42;
@@ -923,40 +1001,56 @@ export class DualArenaEngine {
     this.seed = newSeed;
     this.epoch = 0;
     this.step = 0;
-    this.cursor = 0;
     this.snapshots = [];
     this.viewedEpoch = 0;
 
-    // Independent PRNG instances with deterministic seeds
-    this.dense = new DenseCore(this.V, this.D, this.createRandn(newSeed + 101));
-    this.moe = new MoECore(this.V, this.D, this.createRandn(newSeed));
+    // Generate shared initial E & LM Head (Wout, bout) once so all 3 models start from the same point.
+    const sharedRandn = this.createRandn(newSeed);
+    const sharedInit: SharedInitWeights = {
+      E: createAdamParam(this.V * this.D, 0.24, sharedRandn).data,
+      Wout: createAdamParam(this.V * this.D, Math.sqrt(1.0 / this.D), sharedRandn).data,
+      bout: createAdamParam(this.V, 0.01, sharedRandn).data,
+    };
+
+    this.dense = new DenseCore(this.V, this.D, 18, sharedInit, this.createRandn(newSeed + 101));
+    this.denseBig = new DenseCore(this.V, this.D, 32, sharedInit, this.createRandn(newSeed + 202));
+    this.moe = new MoECore(this.V, this.D, sharedInit, this.createRandn(newSeed + 303));
 
     this.captureSnapshot();
   }
 
   public trainOneEpoch(): void {
     if (this.epoch >= this.MAX_EPOCHS) return;
-    for (let b = 0; b < this.BATCHES_PER_EPOCH; b++) {
-      const batch: Sample[] = [];
-      for (let i = 0; i < this.BATCH_SIZE; i++) {
-        batch.push(this.allSamples[this.cursor % this.allSamples.length]);
-        this.cursor = (this.cursor + 1) % this.allSamples.length;
-      }
-      // Both models receive the EXACT SAME mini-batch in parallel!
+
+    // 1 Epoch = deterministic Fisher-Yates shuffle + complete pass over 100% of samples
+    const rng = mulberry32(this.seed * 997 + (this.epoch + 1) * 131);
+    const indices = this.allSamples.map((_, i) => i);
+    for (let i = indices.length - 1; i > 0; i--) {
+      const j = Math.floor(rng() * (i + 1));
+      const tmp = indices[i];
+      indices[i] = indices[j];
+      indices[j] = tmp;
+    }
+
+    for (let off = 0; off < indices.length; off += this.BATCH_SIZE) {
+      const batch = indices.slice(off, off + this.BATCH_SIZE).map((idx) => this.allSamples[idx]);
+      // All 3 models receive the EXACT SAME shuffled mini-batch in parallel!
       this.dense.trainBatch(batch, this.BASE_LR);
+      this.denseBig.trainBatch(batch, this.BASE_LR);
       this.moe.trainBatch(batch, this.BASE_LR, this.auxLossEnabled);
       this.step += 1;
     }
+
     this.epoch += 1;
     this.captureSnapshot();
     this.viewedEpoch = this.epoch;
   }
 
   private stageLabelForEpoch(ep: number): string {
-    if (ep === 0) return 'Epoch 0: Khởi tạo ngẫu nhiên (chưa học gì)';
-    if (ep <= 3) return `Epoch ${ep}: Đang học từ nối & cấu trúc câu`;
-    if (ep <= 10) return `Epoch ${ep}: MoE phá vỡ đối xứng & phân hóa chuyên gia`;
-    return `Epoch ${ep}: Hội tụ — so sánh độ chính xác & câu sinh`;
+    if (ep === 0) return 'Epoch 0: Khởi tạo chung (E & LM Head giống hệt nhau)';
+    if (ep <= 3) return `Epoch ${ep}: Học cấu trúc câu & từ nối`;
+    if (ep <= 10) return `Epoch ${ep}: Giai đoạn phân bổ tải & hội tụ dần`;
+    return `Epoch ${ep}: So sánh 3 mốc — Dense nhỏ, MoE, Dense to`;
   }
 
   private toIds(text: string): number[] {
@@ -965,7 +1059,8 @@ export class DualArenaEngine {
 
   private captureSnapshot(): void {
     const denseCeLoss = this.dense.evalLoss(this.allSamples);
-    const moeEval = this.moe.evaluate(this.allSamples);
+    const denseBigCeLoss = this.denseBig.evalLoss(this.allSamples);
+    const moeEval = this.moe.evaluate(this.allSamples, this.auxLossEnabled);
 
     const denseProbe = {} as Record<DomainId, DenseProbeInspection>;
     const moeProbe = {} as Record<DomainId, MoeProbeInspection>;
@@ -979,6 +1074,10 @@ export class DualArenaEngine {
       prompt,
       continuation: this.dense.generate(this.toIds(prompt), this.idToWord, 6),
     }));
+    const denseBigGens: GenerationSample[] = ARENA_GEN_PROMPTS.map((prompt) => ({
+      prompt,
+      continuation: this.denseBig.generate(this.toIds(prompt), this.idToWord, 6),
+    }));
     const moeGens: GenerationSample[] = ARENA_GEN_PROMPTS.map((prompt) => ({
       prompt,
       continuation: this.moe.generate(this.toIds(prompt), this.idToWord, 6),
@@ -987,6 +1086,7 @@ export class DualArenaEngine {
     this.snapshots.push({
       epoch: this.epoch,
       step: this.step,
+      auxLossEnabled: this.auxLossEnabled,
       stageLabel: this.stageLabelForEpoch(this.epoch),
       dense: {
         ceLoss: denseCeLoss,
@@ -997,9 +1097,18 @@ export class DualArenaEngine {
         probeByDomain: denseProbe,
         generations: denseGens,
       },
+      denseBig: {
+        ceLoss: denseBigCeLoss,
+        totalParams: this.denseBig.totalParams,
+        ffnParams: this.denseBig.ffnParams,
+        activeFfnNeurons: this.denseBig.H,
+        totalFfnNeurons: this.denseBig.H,
+        generations: denseBigGens,
+      },
       moe: {
         ceLoss: moeEval.ceLoss,
         auxLoss: moeEval.auxLoss,
+        rawImbalance: moeEval.rawImbalance,
         effectiveExperts: moeEval.effectiveExperts,
         specializationPct: moeEval.specializationPct,
         totalParams: this.moe.totalParams,
@@ -1027,10 +1136,13 @@ export class DualArenaEngine {
       viewedEpoch: idx,
       maxEpochs: this.MAX_EPOCHS,
       vocabSize: this.V,
+      totalSamples: this.allSamples.length,
       current: this.snapshots[idx],
       history: this.snapshots.map((s) => ({
         epoch: s.epoch,
+        auxLossEnabled: s.auxLossEnabled,
         denseCeLoss: s.dense.ceLoss,
+        denseBigCeLoss: s.denseBig.ceLoss,
         moeCeLoss: s.moe.ceLoss,
         moeSpecPct: s.moe.specializationPct,
         moeEffExperts: s.moe.effectiveExperts,

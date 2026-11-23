@@ -8,18 +8,25 @@ function emit(): void {
   self.postMessage(engine.getUpdateMessage(running));
 }
 
+function stopLoop(): void {
+  running = false;
+  if (timerId !== null) {
+    clearInterval(timerId);
+    timerId = null;
+  }
+}
+
 function startLoop(): void {
   if (timerId !== null) clearInterval(timerId);
   timerId = setInterval(() => {
-    if (!running) return;
-    if (engine.epoch >= engine.MAX_EPOCHS) {
-      running = false;
+    if (!running || engine.epoch >= engine.MAX_EPOCHS) {
+      stopLoop();
       emit();
       return;
     }
     engine.trainOneEpoch();
     if (engine.epoch >= engine.MAX_EPOCHS) {
-      running = false;
+      stopLoop();
     }
     emit();
   }, 550);
@@ -40,27 +47,29 @@ self.onmessage = (ev: MessageEvent<DualArenaInMessage>) => {
       startLoop();
       break;
     case 'PAUSE':
-      running = false;
+      stopLoop();
       emit();
       break;
     case 'RUN_ONE_EPOCH':
-      running = false;
+      stopLoop();
       engine.trainOneEpoch();
       emit();
       break;
     case 'SELECT_EPOCH':
-      running = false;
+      stopLoop();
       self.postMessage(engine.getUpdateMessage(false, cmd.epoch));
       break;
     case 'RESEED': {
-      running = false;
+      stopLoop();
       const nextSeed = cmd.seed ?? Math.floor(10 + Math.random() * 990);
       engine.reseed(nextSeed);
       emit();
       break;
     }
     case 'SET_AUX_LOSS':
+      stopLoop();
       engine.auxLossEnabled = cmd.enabled;
+      engine.reseed(engine.seed);
       emit();
       break;
   }

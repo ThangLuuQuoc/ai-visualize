@@ -135,37 +135,25 @@ export class DualArenaModal {
     const svg = this.denseSvg;
     svg.innerHTML = '';
 
-    // Shared top pipeline: x -> RMSNorm -> Attention -> + -> FFN(18/18) -> y
-    svgEl('path', { d: 'M 42 95 L 86 95', stroke: '#94a3b8', 'stroke-width': 2.5, fill: 'none' }, svg);
-    svgEl('path', { d: 'M 186 95 L 222 95', stroke: '#38bdf8', 'stroke-width': 3, fill: 'none' }, svg);
-    svgEl('path', { d: 'M 366 95 L 414 95', stroke: '#818cf8', 'stroke-width': 3, fill: 'none' }, svg);
-    // Residual skip arrow over FFN
-    svgEl(
-      'path',
-      {
-        d: 'M 196 95 L 196 28 L 392 28 L 392 95',
-        stroke: '#64748b',
-        'stroke-width': 1.5,
-        'stroke-dasharray': '4 3',
-        fill: 'none',
-      },
-      svg
-    );
+    // Pipeline matching actual DenseCore: x -> Context Pooling -> FFN (tanh, 18/18) -> y (no attention, no residual skip)
+    svgEl('path', { d: 'M 42 95 L 76 95', stroke: '#94a3b8', 'stroke-width': 2.4, fill: 'none' }, svg);
+    svgEl('path', { d: 'M 188 95 L 218 95', stroke: '#38bdf8', 'stroke-width': 2.8, fill: 'none' }, svg);
+    svgEl('path', { d: 'M 376 95 L 414 95', stroke: '#818cf8', 'stroke-width': 2.8, fill: 'none' }, svg);
 
-    svgEl('circle', { cx: 30, cy: 95, r: 15, fill: '#0e7490', stroke: '#22d3ee', 'stroke-width': 2 }, svg);
-    svgEl('text', { x: 30, y: 99, 'text-anchor': 'middle', fill: '#fff', 'font-size': 11, 'font-weight': 800 }, svg).textContent = 'x';
-    this.denseTokText = svgEl('text', { x: 48, y: 66, 'text-anchor': 'middle', fill: '#67e8f9', 'font-size': 11, 'font-weight': 800 }, svg);
+    svgEl('circle', { cx: 28, cy: 95, r: 14, fill: '#0e7490', stroke: '#22d3ee', 'stroke-width': 2 }, svg);
+    svgEl('text', { x: 28, y: 99, 'text-anchor': 'middle', fill: '#fff', 'font-size': 11, 'font-weight': 800 }, svg).textContent = 'x';
+    this.denseTokText = svgEl('text', { x: 46, y: 62, 'text-anchor': 'middle', fill: '#67e8f9', 'font-size': 11, 'font-weight': 800 }, svg);
 
-    // Identical Attention block
-    svgEl('rect', { x: 86, y: 66, width: 100, height: 58, rx: 7, fill: 'rgba(59,130,246,0.22)', stroke: '#3b82f6', 'stroke-width': 2 }, svg);
-    svgEl('text', { x: 136, y: 90, 'text-anchor': 'middle', fill: '#dbeafe', 'font-size': 10.5, 'font-weight': 800 }, svg).textContent = 'Attention';
-    svgEl('text', { x: 136, y: 105, 'text-anchor': 'middle', fill: '#93c5fd', 'font-size': 9 }, svg).textContent = '(Giống hệt MoE)';
+    // Causal Context Pooling block (same as MoE)
+    svgEl('rect', { x: 76, y: 64, width: 112, height: 62, rx: 7, fill: 'rgba(59,130,246,0.22)', stroke: '#3b82f6', 'stroke-width': 2 }, svg);
+    svgEl('text', { x: 132, y: 90, 'text-anchor': 'middle', fill: '#dbeafe', 'font-size': 10.5, 'font-weight': 800 }, svg).textContent = 'Trộn ngữ cảnh';
+    svgEl('text', { x: 132, y: 106, 'text-anchor': 'middle', fill: '#93c5fd', 'font-size': 9 }, svg).textContent = '0.4·từ + 0.6·TB';
 
-    // Single monolithic SwiGLU FFN block (18/18 active)
-    this.denseFfnRect = svgEl('rect', { x: 222, y: 50, width: 144, height: 90, rx: 9, fill: 'rgba(99,102,241,0.34)', stroke: '#818cf8', 'stroke-width': 2.5 }, svg);
-    svgEl('text', { x: 294, y: 84, 'text-anchor': 'middle', fill: '#fff', 'font-size': 12, 'font-weight': 800 }, svg).textContent = '1 Khối FFN Duy Nhất';
-    this.denseFfnLabel = svgEl('text', { x: 294, y: 102, 'text-anchor': 'middle', fill: '#c7d2fe', 'font-size': 10 }, svg);
-    svgEl('text', { x: 294, y: 120, 'text-anchor': 'middle', fill: '#a5b4fc', 'font-size': 9.5 }, svg).textContent = '100% nơ-ron luôn sáng';
+    // Single monolithic tanh FFN block (18/18 active)
+    this.denseFfnRect = svgEl('rect', { x: 218, y: 50, width: 158, height: 90, rx: 9, fill: 'rgba(99,102,241,0.34)', stroke: '#818cf8', 'stroke-width': 2.5 }, svg);
+    svgEl('text', { x: 297, y: 82, 'text-anchor': 'middle', fill: '#fff', 'font-size': 11.5, 'font-weight': 800 }, svg).textContent = '1 Khối FFN (tanh)';
+    this.denseFfnLabel = svgEl('text', { x: 297, y: 101, 'text-anchor': 'middle', fill: '#c7d2fe', 'font-size': 10 }, svg);
+    svgEl('text', { x: 297, y: 120, 'text-anchor': 'middle', fill: '#a5b4fc', 'font-size': 9.5 }, svg).textContent = '100% nơ-ron luôn tính';
 
     svgEl('circle', { cx: 428, cy: 95, r: 14, fill: '#334155', stroke: '#e2e8f0', 'stroke-width': 2 }, svg);
     svgEl('text', { x: 428, y: 99, 'text-anchor': 'middle', fill: '#fff', 'font-size': 11, 'font-weight': 800 }, svg).textContent = 'y';
@@ -178,49 +166,49 @@ export class DualArenaModal {
     const expY = [24, 62, 100, 138];
     const sharedY = 172;
 
-    svgEl('path', { d: 'M 36 95 L 68 95', stroke: '#94a3b8', 'stroke-width': 2, fill: 'none' }, svg);
-    // Attention -> Router
-    svgEl('path', { d: 'M 148 95 L 176 80', stroke: '#fbbf24', 'stroke-width': 2.2, fill: 'none' }, svg);
-    // Attention -> Shared (no router)
-    svgEl('path', { d: `M 148 112 C 165 ${sharedY}, 210 ${sharedY}, 268 ${sharedY}`, stroke: SHARED_COLOR, 'stroke-width': 2.2, fill: 'none' }, svg);
-    svgEl('path', { d: `M 340 ${sharedY} C 380 ${sharedY}, 390 95, 404 95`, stroke: SHARED_COLOR, 'stroke-width': 2.2, fill: 'none' }, svg);
+    svgEl('path', { d: 'M 37 95 L 60 95', stroke: '#94a3b8', 'stroke-width': 2, fill: 'none' }, svg);
+    // Context Pooling -> Router
+    svgEl('path', { d: 'M 152 95 L 178 80', stroke: '#fbbf24', 'stroke-width': 2.2, fill: 'none' }, svg);
+    // Context Pooling -> Shared (no router)
+    svgEl('path', { d: `M 152 112 C 168 ${sharedY}, 210 ${sharedY}, 266 ${sharedY}`, stroke: SHARED_COLOR, 'stroke-width': 2.2, fill: 'none' }, svg);
+    svgEl('path', { d: `M 344 ${sharedY} C 382 ${sharedY}, 390 95, 404 95`, stroke: SHARED_COLOR, 'stroke-width': 2.2, fill: 'none' }, svg);
     svgEl('path', { d: 'M 426 95 L 438 95', stroke: '#e2e8f0', 'stroke-width': 2.5, fill: 'none' }, svg);
 
     for (let e = 0; e < 4; e++) {
       this.moeInPaths.push(
-        svgEl('path', { d: `M 218 80 C 242 80, 240 ${expY[e]}, 268 ${expY[e]}`, fill: 'none' }, svg)
+        svgEl('path', { d: `M 218 80 C 242 80, 240 ${expY[e]}, 266 ${expY[e]}`, fill: 'none' }, svg)
       );
       this.moeOutPaths.push(
-        svgEl('path', { d: `M 340 ${expY[e]} C 378 ${expY[e]}, 386 95, 404 95`, fill: 'none' }, svg)
+        svgEl('path', { d: `M 344 ${expY[e]} C 380 ${expY[e]}, 386 95, 404 95`, fill: 'none' }, svg)
       );
     }
 
     svgEl('circle', { cx: 24, cy: 95, r: 13, fill: '#0e7490', stroke: '#22d3ee', 'stroke-width': 2 }, svg);
     svgEl('text', { x: 24, y: 99, 'text-anchor': 'middle', fill: '#fff', 'font-size': 10.5, 'font-weight': 800 }, svg).textContent = 'x';
-    this.moeTokText = svgEl('text', { x: 42, y: 66, 'text-anchor': 'middle', fill: '#67e8f9', 'font-size': 10.5, 'font-weight': 800 }, svg);
+    this.moeTokText = svgEl('text', { x: 42, y: 64, 'text-anchor': 'middle', fill: '#67e8f9', 'font-size': 10.5, 'font-weight': 800 }, svg);
 
-    // Identical Attention block
-    svgEl('rect', { x: 68, y: 68, width: 80, height: 54, rx: 6, fill: 'rgba(59,130,246,0.22)', stroke: '#3b82f6', 'stroke-width': 2 }, svg);
-    svgEl('text', { x: 108, y: 92, 'text-anchor': 'middle', fill: '#dbeafe', 'font-size': 10, 'font-weight': 800 }, svg).textContent = 'Attention';
-    svgEl('text', { x: 108, y: 106, 'text-anchor': 'middle', fill: '#93c5fd', 'font-size': 8.5 }, svg).textContent = '(Giống Dense)';
+    // Causal Context Pooling block (identical to Dense)
+    svgEl('rect', { x: 60, y: 68, width: 92, height: 54, rx: 6, fill: 'rgba(59,130,246,0.22)', stroke: '#3b82f6', 'stroke-width': 2 }, svg);
+    svgEl('text', { x: 106, y: 91, 'text-anchor': 'middle', fill: '#dbeafe', 'font-size': 10, 'font-weight': 800 }, svg).textContent = 'Trộn ngữ cảnh';
+    svgEl('text', { x: 106, y: 106, 'text-anchor': 'middle', fill: '#93c5fd', 'font-size': 8.4 }, svg).textContent = '0.4·từ + 0.6·TB';
 
     // Router
-    svgEl('circle', { cx: 196, cy: 80, r: 20, fill: '#b45309', stroke: '#fbbf24', 'stroke-width': 2 }, svg);
-    svgEl('text', { x: 196, y: 83, 'text-anchor': 'middle', fill: '#fff', 'font-size': 9.5, 'font-weight': 800 }, svg).textContent = 'Router';
+    svgEl('circle', { cx: 198, cy: 80, r: 20, fill: '#b45309', stroke: '#fbbf24', 'stroke-width': 2 }, svg);
+    svgEl('text', { x: 198, y: 83, 'text-anchor': 'middle', fill: '#fff', 'font-size': 9.5, 'font-weight': 800 }, svg).textContent = 'Router';
 
     // 4 Routed Experts
     for (let e = 0; e < 4; e++) {
       this.moeExpRects.push(
-        svgEl('rect', { x: 268, y: expY[e] - 13, width: 72, height: 26, rx: 6, 'stroke-width': 1.8 }, svg)
+        svgEl('rect', { x: 266, y: expY[e] - 13, width: 78, height: 26, rx: 6, 'stroke-width': 1.8 }, svg)
       );
       this.moeExpStatus.push(
-        svgEl('text', { x: 304, y: expY[e] + 4, 'text-anchor': 'middle', 'font-size': 9.8, 'font-weight': 800 }, svg)
+        svgEl('text', { x: 305, y: expY[e] + 4, 'text-anchor': 'middle', 'font-size': 9.6, 'font-weight': 800 }, svg)
       );
     }
 
-    // Shared Expert
-    svgEl('rect', { x: 268, y: sharedY - 12, width: 72, height: 24, rx: 6, fill: 'rgba(16,185,129,0.25)', stroke: SHARED_COLOR, 'stroke-width': 1.8 }, svg);
-    svgEl('text', { x: 304, y: sharedY + 4, 'text-anchor': 'middle', fill: '#d1fae5', 'font-size': 9.5, 'font-weight': 800 }, svg).textContent = 'Shared (4)';
+    // Shared Expert (scale ×1.0)
+    svgEl('rect', { x: 266, y: sharedY - 12, width: 78, height: 24, rx: 6, fill: 'rgba(16,185,129,0.25)', stroke: SHARED_COLOR, 'stroke-width': 1.8 }, svg);
+    svgEl('text', { x: 305, y: sharedY + 4, 'text-anchor': 'middle', fill: '#d1fae5', 'font-size': 9.3, 'font-weight': 800 }, svg).textContent = 'Shared (4) ×1';
 
     // Sigma + output y
     svgEl('circle', { cx: 414, cy: 95, r: 14, fill: '#1e293b', stroke: '#e2e8f0', 'stroke-width': 2 }, svg);
@@ -292,9 +280,9 @@ export class DualArenaModal {
     // ---- LEFT COLUMN: DENSE ----
     const dProbe = snap.dense.probeByDomain[this.selectedProbe];
     document.getElementById('arena-dense-badge')!.textContent =
-      `18/18 active (${snap.dense.ffnParams} FFN params) • Loss: ${snap.dense.ceLoss.toFixed(3)}`;
+      `18/18 active • CE Loss: ${snap.dense.ceLoss.toFixed(3)}`;
     this.denseTokText.textContent = `“${probeRef.word}”`;
-    this.denseFfnLabel.textContent = `Tính toàn bộ 18/18 nơ-ron cho “${probeRef.word}”`;
+    this.denseFfnLabel.textContent = `18/18 nơ-ron • “${probeRef.word}”`;
     this.denseFfnRect.setAttribute('fill', `rgba(99,102,241,${0.25 + 0.35 * (1 - Math.min(1, snap.dense.ceLoss / 6))})`);
 
     const heatEl = document.getElementById('arena-dense-heat')!;
@@ -320,7 +308,7 @@ export class DualArenaModal {
     // ---- RIGHT COLUMN: MoE ----
     const mProbe = snap.moe.probeByDomain[this.selectedProbe];
     document.getElementById('arena-moe-badge')!.textContent =
-      `18 active / 32 total (${snap.moe.ffnParams} FFN params) • Loss: ${snap.moe.ceLoss.toFixed(3)}`;
+      `18/32 active • CE Loss: ${snap.moe.ceLoss.toFixed(3)} • Eff: ${snap.moe.effectiveExperts.toFixed(2)}/4`;
     this.moeTokText.textContent = `“${probeRef.word}”`;
 
     for (let e = 0; e < 4; e++) {
@@ -388,35 +376,89 @@ export class DualArenaModal {
     if (!ctx) return;
     const w = this.chart.width;
     const h = this.chart.height;
-    const padL = 36;
-    const padR = 36;
-    const padT = 10;
-    const padB = 16;
+    const padL = 44;
+    const padR = 44;
+    const padT = 16;
+    const padB = 18;
+    const plotW = w - padL - padR;
+    const plotH = h - padT - padB;
     ctx.clearRect(0, 0, w, h);
     ctx.font = '10px Inter, Segoe UI, sans-serif';
 
-    ctx.strokeStyle = 'rgba(148,163,184,0.16)';
-    ctx.beginPath();
-    ctx.moveTo(padL, h - padB);
-    ctx.lineTo(w - padR, h - padB);
-    ctx.stroke();
-
     const hist = msg.history;
     if (hist.length < 2) {
+      ctx.strokeStyle = 'rgba(148,163,184,0.22)';
+      ctx.beginPath();
+      ctx.moveTo(padL, h - padB);
+      ctx.lineTo(w - padR, h - padB);
+      ctx.stroke();
       ctx.fillStyle = '#94a3b8';
-      ctx.fillText('Bấm ▶ Chạy liên tục hoặc ⏭ Chạy 1 Epoch rồi dừng để xem đường học của Dense vs MoE...', padL + 8, h / 2 + 4);
+      ctx.fillText(
+        'Bấm ▶ Chạy liên tục hoặc ⏭ Chạy 1 Epoch rồi dừng để xem CE Loss (Dense nhỏ, MoE, Dense to) & Độ phân hóa...',
+        padL + 6,
+        h / 2 + 4
+      );
       return;
     }
 
     const maxX = Math.max(1, hist.length - 1);
-    const xOf = (i: number) => padL + (i / maxX) * (w - padL - padR);
-    const maxLoss = Math.max(2.5, hist[0].denseCeLoss, hist[0].moeCeLoss);
-    const yLoss = (l: number) => padT + (1 - Math.min(maxLoss, l) / maxLoss) * (h - padT - padB);
-    const ySpec = (pct: number) => padT + (1 - Math.min(100, pct) / 100) * (h - padT - padB);
+    const xOf = (i: number) => padL + (i / maxX) * plotW;
+    const maxLossRaw = hist.reduce(
+      (m, pt) => Math.max(m, pt.denseCeLoss, pt.moeCeLoss, pt.denseBigCeLoss),
+      2.5
+    );
+    const maxLoss = Math.ceil(maxLossRaw * 2) / 2;
+    const yLoss = (l: number) => padT + (1 - Math.max(0, Math.min(maxLoss, l)) / maxLoss) * plotH;
+    const ySpec = (pct: number) => padT + (1 - Math.max(0, Math.min(100, pct)) / 100) * plotH;
+
+    // Horizontal dashed gridlines at 100%, 50%, 0%
+    ctx.strokeStyle = 'rgba(148,163,184,0.16)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([3, 3]);
+    for (const frac of [0, 0.5, 1]) {
+      const y = padT + frac * plotH;
+      ctx.beginPath();
+      ctx.moveTo(padL, y);
+      ctx.lineTo(w - padR, y);
+      ctx.stroke();
+    }
+    ctx.setLineDash([]);
+
+    // Left & right Y-axis spines + bottom axis
+    ctx.strokeStyle = 'rgba(148,163,184,0.32)';
+    ctx.beginPath();
+    ctx.moveTo(padL, padT);
+    ctx.lineTo(padL, h - padB);
+    ctx.lineTo(w - padR, h - padB);
+    ctx.lineTo(w - padR, padT);
+    ctx.stroke();
+
+    // Axis titles
+    ctx.fillStyle = '#94a3b8';
+    ctx.textAlign = 'left';
+    ctx.fillText('CE Loss', 4, 11);
+    ctx.fillStyle = '#34d399';
+    ctx.textAlign = 'right';
+    ctx.fillText('Phân hóa', w - 4, 11);
+
+    // Left Y-axis ticks (Loss)
+    ctx.fillStyle = '#cbd5e1';
+    ctx.textAlign = 'right';
+    ctx.fillText(maxLoss.toFixed(1), padL - 5, padT + 4);
+    ctx.fillText((maxLoss / 2).toFixed(1), padL - 5, padT + plotH * 0.5 + 3);
+    ctx.fillText('0.0', padL - 5, h - padB + 3);
+
+    // Right Y-axis ticks (Specialization %)
+    ctx.fillStyle = '#34d399';
+    ctx.textAlign = 'left';
+    ctx.fillText('100%', w - padR + 5, padT + 4);
+    ctx.fillText('50%', w - padR + 5, padT + plotH * 0.5 + 3);
+    ctx.fillText('0%', w - padR + 5, h - padB + 3);
 
     // Scrubber cursor line
     const cursorX = xOf(msg.viewedEpoch);
-    ctx.strokeStyle = 'rgba(254, 240, 138, 0.55)';
+    ctx.strokeStyle = 'rgba(254, 240, 138, 0.65)';
+    ctx.lineWidth = 1.4;
     ctx.setLineDash([4, 3]);
     ctx.beginPath();
     ctx.moveTo(cursorX, padT);
@@ -424,9 +466,18 @@ export class DualArenaModal {
     ctx.stroke();
     ctx.setLineDash([]);
 
-    const drawSeries = (color: string, fn: (pt: (typeof hist)[0]) => number) => {
+    const drawSeries = (
+      color: string,
+      fn: (pt: (typeof hist)[0]) => number,
+      width = 2.1,
+      dash: number[] = [],
+      alpha = 1
+    ) => {
+      ctx.save();
+      ctx.globalAlpha = alpha;
       ctx.strokeStyle = color;
-      ctx.lineWidth = 2.1;
+      ctx.lineWidth = width;
+      ctx.setLineDash(dash);
       ctx.beginPath();
       hist.forEach((pt, i) => {
         const y = fn(pt);
@@ -434,36 +485,114 @@ export class DualArenaModal {
         else ctx.lineTo(xOf(i), y);
       });
       ctx.stroke();
+      ctx.restore();
     };
 
-    drawSeries('#818cf8', (pt) => yLoss(pt.denseCeLoss));
-    drawSeries('#f59e0b', (pt) => yLoss(pt.moeCeLoss));
-    drawSeries('#34d399', (pt) => ySpec(pt.moeSpecPct));
+    drawSeries('#818cf8', (pt) => yLoss(pt.denseCeLoss), 2.2);
+    drawSeries('#f59e0b', (pt) => yLoss(pt.moeCeLoss), 2.2);
+    drawSeries('#38bdf8', (pt) => yLoss(pt.denseBigCeLoss), 2.0, [5, 3]);
+    drawSeries('#34d399', (pt) => ySpec(pt.moeSpecPct), 1.5, [], 0.85);
 
+    // X-axis epoch ticks
     ctx.fillStyle = '#94a3b8';
-    ctx.fillText('Ep 0', padL, h - 3);
-    ctx.fillText(`Ep ${hist[hist.length - 1].epoch}`, w - padR - 30, h - 3);
-    ctx.fillStyle = '#34d399';
-    ctx.fillText(`${msg.current.moe.specializationPct}%`, w - padR + 4, padT + 10);
-    ctx.fillStyle = '#f59e0b';
-    ctx.fillText(`${msg.current.moe.ceLoss.toFixed(2)}`, 2, padT + 10);
+    ctx.textAlign = 'left';
+    ctx.fillText('Ep 0', padL, h - 4);
+    const lastEp = hist[hist.length - 1].epoch;
+    if (lastEp >= 4) {
+      const midEp = Math.round(lastEp / 2);
+      ctx.textAlign = 'center';
+      ctx.fillText(`Ep ${midEp}`, xOf(midEp), h - 4);
+    }
+    ctx.textAlign = 'right';
+    ctx.fillText(`Ep ${lastEp}`, w - padR, h - 4);
+    ctx.textAlign = 'left';
   }
 
   private renderSummary(msg: DualArenaUpdateMessage): void {
     const snap = msg.current;
     const summaryEl = document.getElementById('arena-summary')!;
-    if (this.isSimple) {
-      summaryEl.innerHTML =
-        `<b>⚖️ So sánh công bằng ở Epoch ${snap.epoch} (cùng 18 nơ-ron tính mỗi từ):</b><br/>` +
-        `• <b>Bên trái (Dense):</b> Chỉ có 1 phòng ban 18 người nên từ nào cũng đi chung 1 đường.<br/>` +
-        `• <b>Bên phải (MoE):</b> Chia thành 4 chuyên khoa + 1 đa khoa (tổng 32 người, bộ nhớ ~1.8×) → mỗi từ vẫn chỉ gọi 18 người, nhưng độ phân hóa đạt <b>${snap.moe.specializationPct}%</b> (${snap.moe.effectiveExperts}/4 chuyên gia hoạt động).<br/>` +
-        `<span style="color:#94a3b8">💡 Trên dữ liệu nhỏ 64 câu, Dense đủ chỗ ghi nhớ nhanh; lợi thế MoE bùng nổ khi dữ liệu lớn gấp nghìn lần khiến 1 khối Dense bị quá tải.</span>`;
-    } else {
-      summaryEl.innerHTML =
-        `<b>🔬 Iso-FLOPs Telemetry (Epoch ${snap.epoch}, Step ${snap.step}, Seed #${msg.seed}):</b><br/>` +
-        `• <b>Dense FFN:</b> 18 active / 18 total (<code>${snap.dense.ffnParams}</code> params) → CE Loss = <b>${snap.dense.ceLoss.toFixed(4)}</b>.<br/>` +
-        `• <b>MoE FFN:</b> 18 active / 32 total (<code>${snap.moe.ffnParams}</code> params, ~1.97×) → CE Loss = <b>${snap.moe.ceLoss.toFixed(4)}</b>, Aux = <code>${snap.moe.auxLoss}</code>, Eff = <b>${snap.moe.effectiveExperts}/4</b>, Spec = <b>${snap.moe.specializationPct}%</b>.<br/>` +
-        `<span style="color:#94a3b8">Tua thanh trượt Epoch để quan sát pha phá vỡ đối xứng (Ep 4–10) và thử tắt Aux Loss từ Ep 0 để thấy Expert Collapse ngay trong cùng đấu trường.</span>`;
-    }
+    const moeTotalRatio = (snap.moe.totalParams / snap.dense.totalParams).toFixed(2);
+    const bigTotalRatio = (snap.denseBig.totalParams / snap.dense.totalParams).toFixed(2);
+    const bigComputeRatio = (snap.denseBig.activeFfnNeurons / snap.dense.activeFfnNeurons).toFixed(2);
+    const moeFfnRatio = (snap.moe.ffnParams / snap.dense.ffnParams).toFixed(2);
+    const bigFfnRatio = (snap.denseBig.ffnParams / snap.dense.ffnParams).toFixed(2);
+    const nonFfnParams = snap.dense.totalParams - snap.dense.ffnParams;
+    const nonFfnMoePct = Math.round((nonFfnParams / snap.moe.totalParams) * 100);
+
+    const fmtN = (n: number) => n.toLocaleString('en-US');
+    const auxBadge = snap.auxLossEnabled
+      ? `BẬT (Aux=${snap.moe.auxLoss.toFixed(3)})`
+      : `TẮT (α=0)`;
+
+    const tableRows = this.isSimple
+      ? `
+        <tr>
+          <td>⚡ Nơ-ron FFN tính / từ</td>
+          <td>${snap.dense.activeFfnNeurons} (1×)</td>
+          <td class="cur">${snap.moe.activeFfnNeurons} (1×)</td>
+          <td class="big">${snap.denseBig.activeFfnNeurons} (${bigComputeRatio}×)</td>
+        </tr>
+        <tr>
+          <td>🧠 Tổng tham số</td>
+          <td>${fmtN(snap.dense.totalParams)} (1×)</td>
+          <td class="cur">${fmtN(snap.moe.totalParams)} (${moeTotalRatio}×)</td>
+          <td class="big">${fmtN(snap.denseBig.totalParams)} (${bigTotalRatio}×)</td>
+        </tr>
+        <tr>
+          <td>📉 CE Loss (Ep ${snap.epoch})</td>
+          <td>${snap.dense.ceLoss.toFixed(3)}</td>
+          <td class="cur">${snap.moe.ceLoss.toFixed(3)}</td>
+          <td class="big">${snap.denseBig.ceLoss.toFixed(3)}</td>
+        </tr>`
+      : `
+        <tr>
+          <td>Active / Total FFN</td>
+          <td>${snap.dense.activeFfnNeurons}/${snap.dense.totalFfnNeurons} (1×)</td>
+          <td class="cur">${snap.moe.activeFfnNeurons}/${snap.moe.totalFfnNeurons} (1×)</td>
+          <td class="big">${snap.denseBig.activeFfnNeurons}/${snap.denseBig.totalFfnNeurons} (${bigComputeRatio}×)</td>
+        </tr>
+        <tr>
+          <td>FFN params</td>
+          <td>${fmtN(snap.dense.ffnParams)} (1×)</td>
+          <td class="cur">${fmtN(snap.moe.ffnParams)} (${moeFfnRatio}×)</td>
+          <td class="big">${fmtN(snap.denseBig.ffnParams)} (${bigFfnRatio}×)</td>
+        </tr>
+        <tr>
+          <td>Total params</td>
+          <td>${fmtN(snap.dense.totalParams)} (1×)</td>
+          <td class="cur">${fmtN(snap.moe.totalParams)} (${moeTotalRatio}×)</td>
+          <td class="big">${fmtN(snap.denseBig.totalParams)} (${bigTotalRatio}×)</td>
+        </tr>
+        <tr>
+          <td>CE Loss (Ep ${snap.epoch})</td>
+          <td><b>${snap.dense.ceLoss.toFixed(4)}</b></td>
+          <td class="cur"><b>${snap.moe.ceLoss.toFixed(4)}</b></td>
+          <td class="big"><b>${snap.denseBig.ceLoss.toFixed(4)}</b></td>
+        </tr>`;
+
+    const notesHtml = this.isSimple
+      ? `<div class="arena-summary-notes">
+          • <b>Trạng thái MoE:</b> Aux Loss <b>${auxBadge}</b> · Độ lệch tải <code>ce·P = ${snap.moe.rawImbalance.toFixed(2)}</code> (1.00 = đều) · Chuyên gia dùng thật: <b>${snap.moe.effectiveExperts.toFixed(2)}/4</b> · Phân hóa: <b>${snap.moe.specializationPct}%</b>.<br/>
+          • <b>Kết quả thực tế trên 64 câu (${msg.totalSamples} token/epoch):</b> cùng tính 18 nơ-ron/từ, <b>MoE và Dense nhỏ đạt Loss gần ngang nhau</b>; <b>Dense to (32)</b> học sát hơn vì tính gấp ${bigComputeRatio}× mỗi từ. Tổng tham số MoE chỉ gấp <b>${moeTotalRatio}×</b> vì ~${nonFfnMoePct}% tham số (${fmtN(nonFfnParams)}) nằm ở Embedding + lớp Đầu ra, nên FFN chưa bị nghẽn cổ chai.<br/>
+          <span style="color:#94a3b8">💡 Ghi chú: màu 4 chủ đề chỉ để quan sát — dữ liệu nhỏ này dùng từ vựng tách biệt theo chủ đề, khác với LLM lớn (panel X-Ray) nơi Router chia theo ngữ cảnh/cú pháp ngầm.</span>
+        </div>`
+      : `<div class="arena-summary-notes">
+          • <code>Ep ${snap.epoch} · Step ${snap.step} · Seed #${msg.seed} · ${msg.totalSamples} tokens/epoch (100% shuffled)</code><br/>
+          • <b>MoE Balance:</b> Aux = <code>${auxBadge}</code>, raw <code>ce·P = ${snap.moe.rawImbalance.toFixed(3)}</code> (1.00 = balanced, 2.00 = Top-2 collapse), <code>exp(H) = ${snap.moe.effectiveExperts.toFixed(2)}/4</code>, Spec = <b>${snap.moe.specializationPct}%</b>.<br/>
+          <span style="color:#94a3b8">E + LM Head chiếm ${fmtN(nonFfnParams)} (~${nonFfnMoePct}% tổng tham số MoE), nên FFN không phải nút thắt chính trên corpus 64 câu: MoE (Aux BẬT) ngang ngửa Dense-18 và thua Dense-32; tắt Aux làm <code>exp(H)</code> tụt và CE Loss tăng. Màu miền chỉ phản ánh từ vựng tách biệt của bộ toy này (không trái ngược X-Ray ở LLM thật).</span>
+        </div>`;
+
+    summaryEl.innerHTML = `
+      <table class="arena-cmp-table">
+        <thead><tr>
+          <th></th>
+          <th>Dense nhỏ (18)</th>
+          <th class="cur">MoE (18/32)</th>
+          <th class="big">Dense to (32)</th>
+        </tr></thead>
+        <tbody>${tableRows}</tbody>
+      </table>
+      ${notesHtml}
+    `;
   }
 }

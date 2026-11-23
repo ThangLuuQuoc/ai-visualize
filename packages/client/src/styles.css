@@ -1491,12 +1491,13 @@ body {
   grid-template-columns: 1fr 1fr;
   gap: 10px;
 }
-@media (max-width: 1024px) {
+@media (max-width: 780px) {
   .arena-grid {
     grid-template-columns: 1fr;
   }
 }
 .arena-col {
+  min-width: 0;
   background: rgba(15, 23, 42, 0.72);
   border-radius: 10px;
   padding: 9px 11px;
@@ -1621,16 +1622,17 @@ body {
 }
 .arena-bottom {
   display: grid;
-  grid-template-columns: 1.2fr 1fr;
+  grid-template-columns: 1.15fr 1fr;
   gap: 10px;
   align-items: stretch;
 }
-@media (max-width: 1024px) {
+@media (max-width: 860px) {
   .arena-bottom {
     grid-template-columns: 1fr;
   }
 }
 .arena-chart-wrap {
+  min-width: 0;
   background: rgba(2, 6, 23, 0.65);
   border: 1px solid rgba(148, 163, 184, 0.2);
   border-radius: 9px;
@@ -1644,17 +1646,66 @@ body {
 .arena-chart-legend {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px 12px;
+  gap: 4px 10px;
   font-size: 10px;
   color: #cbd5e1;
   margin-top: 3px;
 }
 .arena-summary {
+  min-width: 0;
   background: rgba(15, 23, 42, 0.8);
   border: 1px solid rgba(56, 189, 248, 0.25);
   border-radius: 9px;
   padding: 7px 10px;
-  font-size: 11px;
-  line-height: 1.48;
+  font-size: 10.8px;
+  line-height: 1.44;
   color: #cbd5e1;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.arena-cmp-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 10.5px;
+}
+.arena-cmp-table th,
+.arena-cmp-table td {
+  padding: 3px 5px;
+  text-align: right;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+}
+.arena-cmp-table th:first-child,
+.arena-cmp-table td:first-child {
+  text-align: left;
+  color: #cbd5e1;
+  font-weight: 500;
+}
+.arena-cmp-table th {
+  font-size: 10px;
+  color: #94a3b8;
+  font-weight: 700;
+}
+.arena-cmp-table td {
+  font-family: 'JetBrains Mono', Consolas, monospace;
+  color: #e2e8f0;
+  white-space: nowrap;
+}
+.arena-cmp-table td:first-child {
+  font-family: inherit;
+  white-space: normal;
+}
+.arena-cmp-table .cur {
+  background: rgba(245, 158, 11, 0.1);
+  color: #fde68a;
+}
+.arena-cmp-table th.cur {
+  color: #fbbf24;
+}
+.arena-cmp-table .big {
+  color: #7dd3fc;
+}
+.arena-summary-notes {
+  font-size: 10.5px;
+  line-height: 1.42;
 }

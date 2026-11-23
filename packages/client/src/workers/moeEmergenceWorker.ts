@@ -11,10 +11,21 @@ function emit(): void {
   self.postMessage(moeModel.buildSnapshot(running));
 }
 
+function stopLoop(): void {
+  running = false;
+  if (timerId !== null) {
+    clearInterval(timerId);
+    timerId = null;
+  }
+}
+
 function startLoop(): void {
   if (timerId !== null) clearInterval(timerId);
   timerId = setInterval(() => {
-    if (!running) return;
+    if (!running) {
+      stopLoop();
+      return;
+    }
     for (let i = 0; i < 3; i++) {
       moeModel.trainOneStep(64);
     }
@@ -34,7 +45,7 @@ self.onmessage = (ev: MessageEvent<MoeEmergenceInMessage>) => {
       startLoop();
       break;
     case 'PAUSE':
-      running = false;
+      stopLoop();
       emit();
       break;
     case 'STEP_BATCH': {

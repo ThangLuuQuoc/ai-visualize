@@ -335,9 +335,9 @@
         <div class="arena-toolbar">
           <div class="arena-toolbar-btns">
             <button id="btn-arena-run" class="emerge-start-btn">▶ Chạy liên tục</button>
-            <button id="btn-arena-step" class="icon-btn" title="Train thêm đúng 1 lượt đọc hết 64 câu rồi tự dừng để quan sát">⏭ Chạy 1 Epoch rồi dừng</button>
-            <button id="btn-arena-reseed" class="icon-btn" title="Khởi tạo lại ngẫu nhiên cả 2 mạng">🎲 Đổi hạt giống</button>
-            <button id="btn-arena-aux" class="aux-toggle on" title="Bật/Tắt Aux Loss bên mạng MoE để xem hiệu ứng chia việc">Aux Loss MoE: BẬT ✓</button>
+            <button id="btn-arena-step" class="icon-btn" title="Train thêm đúng 1 lượt đủ 100% 64 câu (880 token, có xáo trộn) rồi tự dừng">⏭ Chạy 1 Epoch rồi dừng</button>
+            <button id="btn-arena-reseed" class="icon-btn" title="Khởi tạo lại ngẫu nhiên cả 3 mạng (dùng chung E &amp; LM Head ban đầu)">🎲 Đổi hạt giống</button>
+            <button id="btn-arena-aux" class="aux-toggle on" title="Bật/Tắt Aux Loss bên MoE (tự reset về Epoch 0 cùng seed để không trộn lịch sử)">Aux Loss MoE: BẬT ✓</button>
           </div>
           <div class="arena-scrubber">
             <span class="arena-scrub-lbl">Tua Lịch sử:</span>
@@ -378,7 +378,7 @@
               <span id="arena-moe-badge" class="arena-col-badge">18 active / 32 total • CE Loss: 5.90</span>
             </div>
             <svg id="arena-moe-svg" class="arena-svg" viewBox="0 0 460 190" preserveAspectRatio="xMidYMid meet"></svg>
-            <div class="arena-subhead">4 Chuyên gia tự hình thành qua dữ liệu (màu chỉ để quan sát):</div>
+            <div class="arena-subhead">4 Chuyên gia tự hình thành (màu chủ đề chỉ để quan sát — từ vựng 4 miền tách biệt):</div>
             <div id="arena-moe-experts" class="arena-moe-mini-grid"></div>
             <div id="arena-moe-pred" class="arena-pred-strip"></div>
             <div class="arena-subhead">Câu viết tiếp thật của MoE tại ĐÚNG CÙNG Epoch:</div>
@@ -388,12 +388,13 @@
 
         <div class="arena-bottom">
           <div class="arena-chart-wrap">
-            <canvas id="arena-chart" class="arena-chart" width="680" height="108"></canvas>
+            <canvas id="arena-chart" class="arena-chart" width="680" height="126"></canvas>
             <div class="arena-chart-legend">
-              <span><b style="color:#818cf8">━</b> CE Loss Dense</span>
-              <span><b style="color:#f59e0b">━</b> CE Loss MoE</span>
-              <span><b style="color:#34d399">━</b> Độ phân hóa MoE (%)</span>
-              <span style="color:#94a3b8">Vạch đứng = Epoch đang tua xem</span>
+              <span><b style="color:#818cf8">━</b> CE Loss Dense nhỏ (18) [trái]</span>
+              <span><b style="color:#f59e0b">━</b> CE Loss MoE (18/32) [trái]</span>
+              <span><b style="color:#38bdf8">╌</b> CE Loss Dense to (32) [trái]</span>
+              <span><b style="color:#34d399">━</b> Phân hóa MoE (%) [phải]</span>
+              <span style="color:#94a3b8">Vạch đứng = Epoch đang tua</span>
             </div>
           </div>
           <div id="arena-summary" class="arena-summary"></div>

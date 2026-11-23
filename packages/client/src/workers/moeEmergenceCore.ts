@@ -752,8 +752,11 @@ export class RealEmergentMoEModel {
 
     const grandTotal = expertSlotTotals.reduce((a, b) => a + b, 0) || 1;
     const loads = expertSlotTotals.map((t) => t / grandTotal);
-    const sumSq = loads.reduce((acc, l) => acc + l * l, 0);
-    const effectiveExperts = Number((sumSq > 0 ? 1 / sumSq : 0).toFixed(2));
+    let entropy = 0;
+    for (const l of loads) {
+      if (l > 1e-9) entropy -= l * Math.log(l);
+    }
+    const effectiveExperts = Number(Math.exp(entropy).toFixed(2));
 
     const enabledCount = DOMAIN_ORDER.filter((d) => this.enabledDomains[d]).length || 1;
     const baselinePurity = 1 / enabledCount;
