@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="vi">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MiniMind 3D Training & Architecture Visualizer</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <div id="canvas-container"></div>
+    <div id="labels-container"></div>
+
+    <!-- Top Navigation & Pipeline Control Bar -->
+    <header class="hud-topbar">
+      <div class="brand">
+        <span class="brand-badge">MINIMIND 3D</span>
+        <div>
+          <h1>SLM Architecture & Training Visualizer</h1>
+          <p class="subtitle">Vocab 6400 • RoPE • GQA (8Q/2KV) • FlashAttention • bfloat16</p>
+        </div>
+      </div>
+
+      <!-- Architecture Switcher -->
+      <div class="control-group">
+        <span class="group-label">KIẾN TRÚC</span>
+        <div class="segmented" id="arch-switcher">
+          <button data-arch="dense" class="seg-btn">Dense (64M)</button>
+          <button data-arch="moe" class="seg-btn active">MoE (198M / 64M Active)</button>
+        </div>
+      </div>
+
+      <!-- Training Pipeline Stage Switcher -->
+      <div class="control-group">
+        <span class="group-label">CHUỖI HUẤN LUYỆN (PIPELINE)</span>
+        <div class="pipeline-steps" id="stage-switcher">
+          <button data-stage="pretrain" class="stage-btn active">1. Pretrain</button>
+          <span class="pipe-arrow">→</span>
+          <button data-stage="sft" class="stage-btn">2. Full SFT</button>
+          <span class="pipe-arrow">→</span>
+          <button data-stage="lora" class="stage-btn">3. LoRA (Rank-8)</button>
+          <span class="pipe-arrow">→</span>
+          <button data-stage="rl_dpo" class="stage-btn">4a. RL (DPO)</button>
+          <button data-stage="rl_grpo" class="stage-btn">4b. RL (GRPO)</button>
+        </div>
+      </div>
+
+      <!-- Playback & Connection Controls -->
+      <div class="control-group playback-controls">
+        <span id="conn-badge" class="conn-badge sim">SIMULATOR</span>
+        <button id="btn-pause" class="icon-btn" title="Tạm dừng / Tiếp tục">⏸ Pause</button>
+        <button id="btn-step" class="icon-btn" title="Chạy từng bước">+1 Step</button>
+        <button id="btn-cam-reset" class="icon-btn" title="Đặt lại góc nhìn 3D">🎥 Reset View</button>
+      </div>
+    </header>
+
+    <!-- Left HUD: Token Stream, RoPE, Loss Masking & Stage Insights -->
+    <aside class="hud-panel hud-left">
+      <section class="hud-card">
+        <div class="card-header">
+          <h2>Luồng Token & RoPE Phase</h2>
+          <span id="phase-pill" class="phase-pill forward">FORWARD</span>
+        </div>
+        <p class="card-hint" id="token-stream-hint">
+          Pretrain: Tính Cross-Entropy Loss trên toàn bộ 100% token.
+        </p>
+        <div id="token-list" class="token-list"></div>
+      </section>
+
+      <section class="hud-card">
+        <div class="card-header">
+          <h2>Cơ chế Tối ưu Tốc độ Train</h2>
+          <span id="stage-tag" class="tag-badge">PRETRAIN</span>
+        </div>
+        <div id="optimization-insight" class="insight-box"></div>
+      </section>
+
+      <section class="hud-card">
+        <div class="card-header">
+          <h2>Chú giải Không gian 3D</h2>
+        </div>
+        <ul class="legend-list">
+          <li><span class="dot cyan"></span> <b>Luồng Forward / Active Token:</b> Kích hoạt qua 8 Layers</li>
+          <li><span class="dot red"></span> <b>Luồng Backward Gradient:</b> Cập nhật trọng số đang mở khóa</li>
+          <li><span class="dot ice"></span> <b>Khối Frozen Glass (LoRA / Ref):</b> Đóng băng (0 grad, tiết kiệm VRAM)</li>
+          <li><span class="dot magenta"></span> <b>Nhánh LoRA (A × B) / Top-K MoE:</b> Điểm tập trung tính toán</li>
+          <li><span class="dot emerald"></span> <b>RL Alignment (y_win / Group Reward):</b> Căn chỉnh chính sách</li>
+        </ul>
+      </section>
+    </aside>
+
+    <!-- Right HUD: Live Metrics, Loss Curve, MoE Load / RL Rewards, 3D Inspector -->
+    <aside class="hud-panel hud-right">
+      <section class="hud-card">
+        <div class="card-header">
+          <h2>Thông số Huấn luyện Thực tế</h2>
+          <span id="step-counter" class="mono-text">Step 1 • Epoch 1</span>
+        </div>
+        <div class="metrics-grid">
+          <div class="metric-box">
+            <span class="m-label">Loss</span>
+            <span id="m-loss" class="m-val accent-amber">7.4200</span>
+          </div>
+          <div class="metric-box">
+            <span class="m-label">Learning Rate</span>
+            <span id="m-lr" class="m-val mono-text">5.00e-4</span>
+          </div>
+          <div class="metric-box">
+            <span class="m-label">Throughput</span>
+            <span id="m-tps" class="m-val accent-cyan">21,400 tok/s</span>
+          </div>
+          <div class="metric-box">
+            <span class="m-label">VRAM Footprint</span>
+            <span id="m-vram" class="m-val accent-emerald">2,650 MB</span>
+          </div>
+          <div class="metric-box wide">
+            <span class="m-label">Tham số (Trainable / Active / Total)</span>
+            <span id="m-params" class="m-val mono-text">198.4M / 64.2M / 198.4M</span>
+          </div>
+        </div>
+        <canvas id="loss-chart" width="320" height="110"></canvas>
+      </section>
+
+      <section class="hud-card" id="moe-or-rl-card">
+        <div class="card-header">
+          <h2 id="dynamic-panel-title">Phân bổ Tải MoE Experts (Top-2 / 6)</h2>
+          <span id="dynamic-panel-badge" class="mono-text">Aux Loss: 0.018</span>
+        </div>
+        <div id="dynamic-panel-body"></div>
+      </section>
+
+      <section class="hud-card">
+        <div class="card-header">
+          <h2>Chi tiết Khối 3D (Click để soi)</h2>
+          <span id="inspect-badge" class="tag-badge">LAYER 0</span>
+        </div>
+        <div id="inspector-body" class="inspector-body">
+          Click vào bất kỳ khối Layer, MoE Expert, nhánh LoRA hoặc cổng GQA nào trong không gian 3D để xem thông số tensor và gradient.
+        </div>
+      </section>
+    </aside>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
