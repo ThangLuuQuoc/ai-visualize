@@ -68,6 +68,7 @@ export class MiniMindScene {
   private baseActivationGradWaveBar!: THREE.Mesh;
 
   private labels: FloatingLabel[] = [];
+  private container: HTMLElement;
   private labelsContainer: HTMLElement;
   private latestFrame: TelemetryFrame | null = null;
   private lastStage: TrainingStage | null = null;
@@ -80,6 +81,7 @@ export class MiniMindScene {
   private stepDurationSec = 4.8;
   private currentSpeed = 1.0;
   private isPaused = false;
+  private suspended = false;
 
   // Exact 0 -> 1 camera fly-to state using lerpVectors
   private camLerpAlpha = 1.0;
@@ -96,6 +98,7 @@ export class MiniMindScene {
   private readonly LAYER_SPACING = 6.0;
 
   constructor(container: HTMLElement, labelsContainer: HTMLElement) {
+    this.container = container;
     this.labelsContainer = labelsContainer;
 
     this.scene = new THREE.Scene();
@@ -142,6 +145,17 @@ export class MiniMindScene {
     cb: (meta: InspectableMetadata, frame: TelemetryFrame | null) => void
   ): void {
     this.onSelectCallback = cb;
+  }
+
+  public setSuspended(suspended: boolean): void {
+    if (this.suspended === suspended) return;
+    this.suspended = suspended;
+    this.container.classList.toggle('scene-suspended', suspended);
+    this.labelsContainer.classList.toggle('scene-suspended', suspended);
+    if (!suspended) {
+      // Discard elapsed pause time so resuming does not jump dt or animations.
+      this.clock.getDelta();
+    }
   }
 
   public resetCamera(): void {
@@ -923,6 +937,9 @@ export class MiniMindScene {
     requestAnimationFrame(() => this.animate());
 
     const dt = Math.min(0.05, this.clock.getDelta());
+    if (this.suspended) {
+      return;
+    }
 
     // 1. Exact 0 -> 1 camera fly-to using lerpVectors + cubic ease-out (reaches 100% of target!)
     if (this.camLerpAlpha < 1.0) {

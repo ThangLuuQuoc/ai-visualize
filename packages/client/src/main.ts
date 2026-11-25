@@ -247,12 +247,14 @@ class MiniMindVisualizerApp {
   private arena: DualArenaModal;
   private xrayOpenedByStory = false;
   private lastArchCmpKey = '';
+  private sceneSuspended = false;
+  private pendingCommandSync = false;
 
   constructor() {
     const canvasContainer = document.getElementById('canvas-container')!;
     const labelsContainer = document.getElementById('labels-container')!;
     this.scene = new MiniMindScene(canvasContainer, labelsContainer);
-    this.arena = new DualArenaModal();
+    this.arena = new DualArenaModal(() => this.syncOverlayFocusState());
 
     this.xray = new MoeXrayPanel({
       onFocusChange: (focus) => {
@@ -262,6 +264,7 @@ class MiniMindVisualizerApp {
       },
       onSetAuxLoss: (enabled) => this.sendCommand({ type: 'SET_AUX_LOSS', auxLossEnabled: enabled }),
       onSpeed3x: () => this.sendCommand({ type: 'SET_SPEED', speed: 3 }),
+      onStateChange: () => this.syncOverlayFocusState(),
     });
 
     this.scene.onNodeSelected((meta, frame) => {
@@ -282,11 +285,33 @@ class MiniMindVisualizerApp {
     this.onTelemetryFrame(this.localSim.buildFrame(), false);
 
     setInterval(() => {
-      if (!this.wsConnected) {
+      if (!this.wsConnected && !this.isBackgroundSimSuspended()) {
         const frame = this.localSim.tick(0.12);
         this.onTelemetryFrame(frame, false);
       }
     }, 120);
+  }
+
+  private isOverlayOpen(): boolean {
+    return this.xray.isOpen() || this.arena.isOpen();
+  }
+
+  private isBackgroundSimSuspended(): boolean {
+    return this.arena.isOpen() || (this.xray.isOpen() && this.xray.getTab() !== 'balance');
+  }
+
+  private syncOverlayFocusState(): void {
+    const overlayOpen = this.isOverlayOpen();
+    const wasSuspended = this.sceneSuspended;
+    this.sceneSuspended = overlayOpen;
+    this.scene.setSuspended(overlayOpen);
+    document.body.classList.toggle('overlay-focus-active', overlayOpen);
+    if (
+      ((wasSuspended && !overlayOpen) || (overlayOpen && !this.isBackgroundSimSuspended())) &&
+      this.latestFrame
+    ) {
+      this.onTelemetryFrame(this.latestFrame, this.wsConnected);
+    }
   }
 
   private connectWebSocket(): void {
@@ -302,7 +327,23 @@ class MiniMindVisualizerApp {
         try {
           const msg = JSON.parse(ev.data);
           if (msg.type === 'TELEMETRY_FRAME' && msg.frame) {
-            this.onTelemetryFrame(msg.frame as TelemetryFrame, true);
+            const incoming = msg.frame as TelemetryFrame;
+            if (this.isBackgroundSimSuspended()) {
+              const configChanged =
+                this.pendingCommandSync ||
+                !this.latestFrame ||
+                incoming.stage !== this.latestFrame.stage ||
+                incoming.architecture !== this.latestFrame.architecture ||
+                incoming.moeBalance?.auxLossEnabled !== this.latestFrame.moeBalance?.auxLossEnabled;
+              this.latestFrame = incoming;
+              if (configChanged) {
+                this.pendingCommandSync = false;
+                this.onTelemetryFrame(incoming, true);
+              }
+              return;
+            }
+            this.pendingCommandSync = false;
+            this.onTelemetryFrame(incoming, true);
           }
         } catch {
           // ignore
@@ -325,6 +366,7 @@ class MiniMindVisualizerApp {
   private sendCommand(cmd: ControlCommand): void {
     this.localSim.applyCommand(cmd);
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.pendingCommandSync = true;
       this.ws.send(JSON.stringify(cmd));
     } else {
       this.onTelemetryFrame(this.localSim.buildFrame(), false);
@@ -575,7 +617,7 @@ class MiniMindVisualizerApp {
     worker.onmessage = (ev: MessageEvent<MicroLmUpdateMessage>) => {
       if (ev.data?.type === 'MICRO_LM_UPDATE') {
         this.latestMicroLm = ev.data;
-        if (this.microLmActive && this.latestFrame) {
+        if (this.microLmActive && this.latestFrame && !this.isBackgroundSimSuspended()) {
           this.onTelemetryFrame(this.latestFrame, this.wsConnected);
         }
       }

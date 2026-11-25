@@ -144,7 +144,10 @@
           <!-- MoE X-Ray: one layer, one token at a time -->
           <div id="xray-panel" class="xray-panel hidden">
             <div class="xray-header">
-              <h3>🔍 Soi tầng MoE <span id="xray-layer-label" class="xray-layer-pill">L0</span></h3>
+              <div class="xray-title-wrap">
+                <h3>🔍 Soi tầng MoE <span id="xray-layer-label" class="xray-layer-pill">L0</span></h3>
+                <span id="xray-bg-status" class="xray-bg-status">⏸ 3D nền tạm dừng</span>
+              </div>
               <div class="segmented xray-tabs" id="xray-tabs">
                 <button data-xtab="route" class="seg-btn active">① 1 từ đi qua tầng này</button>
                 <button data-xtab="balance" class="seg-btn">② Thí nghiệm Aux Loss</button>

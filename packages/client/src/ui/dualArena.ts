@@ -45,11 +45,15 @@ export class DualArenaModal {
 
   private builtStaticGrids = false;
 
-  constructor() {
+  constructor(private readonly onOpenChange?: (open: boolean) => void) {
     this.buildDenseSvg();
     this.buildMoeSvg();
     this.ensureStaticContainersBuilt();
     this.bindEvents();
+  }
+
+  public isOpen(): boolean {
+    return this.isOpenState;
   }
 
   public open(): void {
@@ -57,6 +61,7 @@ export class DualArenaModal {
     this.modal.classList.remove('hidden');
     this.ensureWorker();
     if (this.latestMsg) this.render(this.latestMsg);
+    this.onOpenChange?.(true);
   }
 
   public close(): void {
@@ -64,6 +69,7 @@ export class DualArenaModal {
     this.isOpenState = false;
     this.modal.classList.add('hidden');
     this.worker?.postMessage({ type: 'PAUSE' });
+    this.onOpenChange?.(false);
   }
 
   public setLevel(isSimple: boolean): void {

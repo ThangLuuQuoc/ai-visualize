@@ -15,11 +15,14 @@ export interface XrayFocus {
   tokenIdx: number;
 }
 
+export type XrayTab = 'route' | 'balance' | 'emerge';
+
 export interface XrayCallbacks {
   /** Called whenever the focused (layer, token) changes, or with null when the panel closes. */
   onFocusChange(focus: XrayFocus | null): void;
   onSetAuxLoss(enabled: boolean): void;
   onSpeed3x(): void;
+  onStateChange?(open: boolean, tab: XrayTab): void;
 }
 
 // SVG layout (viewBox 0 0 600 270)
@@ -130,16 +133,42 @@ export class MoeXrayPanel {
     return this.openState;
   }
 
+  public getTab(): XrayTab {
+    return this.tab;
+  }
+
+  private syncBgStatusBadge(): void {
+    const el = document.getElementById('xray-bg-status');
+    if (!el) return;
+    if (this.tab === 'balance') {
+      el.textContent = '📊 3D nền ẩn · Đang chạy Aux Loss';
+      el.classList.add('active-sim');
+    } else {
+      el.textContent = '⏸ 3D nền tạm dừng';
+      el.classList.remove('active-sim');
+    }
+  }
+
+  private resetActiveSectionScroll(): void {
+    const secId =
+      this.tab === 'balance' ? 'xray-balance' : this.tab === 'emerge' ? 'xray-emerge' : 'xray-route';
+    const sec = document.getElementById(secId);
+    if (sec) sec.scrollTop = 0;
+  }
+
   public open(layerIdx?: number): void {
     if (typeof layerIdx === 'number') this.layerIdx = layerIdx;
     this.openState = true;
     this.panel.classList.remove('hidden');
     this.lastFocusKey = '';
     this.lastRouteKey = '';
+    this.syncBgStatusBadge();
+    this.resetActiveSectionScroll();
     window.clearInterval(this.autoTimer);
     this.autoTimer = window.setInterval(() => this.advanceAuto(), AUTO_CYCLE_MS);
     if (!this.rafId) this.rafId = requestAnimationFrame((t) => this.animateParticles(t));
     if (this.frame) this.update(this.frame);
+    this.cb.onStateChange?.(true, this.tab);
   }
 
   public close(): void {
@@ -152,6 +181,7 @@ export class MoeXrayPanel {
     this.lastFocusKey = '';
     this.pauseEmergeWorker();
     this.cb.onFocusChange(null);
+    this.cb.onStateChange?.(false, this.tab);
   }
 
   public setLevel(isSimple: boolean): void {
@@ -207,12 +237,15 @@ export class MoeXrayPanel {
         document.getElementById('xray-balance')!.classList.toggle('hidden', this.tab !== 'balance');
         document.getElementById('xray-emerge')!.classList.toggle('hidden', this.tab !== 'emerge');
         this.lastRouteKey = '';
+        this.syncBgStatusBadge();
+        this.resetActiveSectionScroll();
         if (this.tab === 'emerge') {
           this.ensureEmergeWorker();
         } else {
           this.pauseEmergeWorker();
         }
         if (this.frame) this.update(this.frame);
+        this.cb.onStateChange?.(this.openState, this.tab);
       });
     });
     document.getElementById('btn-aux-toggle')!.addEventListener('click', () => {
